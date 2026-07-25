@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a1a2a">
+  <title>知识库</title>
+  <script>
+    // 最小 Buffer polyfill — gray-matter 依赖 kind-of, 后者检测 Buffer.isBuffer
+    globalThis.Buffer = function(s){this._s=s};
+    globalThis.Buffer.prototype.toString = function(){return String(this._s)};
+    globalThis.Buffer.from = function(s){return new globalThis.Buffer(s)};
+    globalThis.Buffer.isBuffer = function(o){return o instanceof globalThis.Buffer};
+  </script>
+</head>
+<body>
+  <ll-app></ll-app>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

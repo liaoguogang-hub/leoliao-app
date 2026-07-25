@@ -1,0 +1,20 @@
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "oss:ListObjects",
+        "oss:GetObject",
+        "oss:GetObjectMeta",
+        "oss:PutObject",
+        "oss:DeleteObject",
+        "oss:GetBucketInfo"
+      ],
+      "Resource": [
+        "acs:oss:*:*:liaoguogang",
+        "acs:oss:*:*:liaoguogang/*"
+      ]
+    }
+  ]
+}
