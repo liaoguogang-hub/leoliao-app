@@ -707,6 +707,52 @@ ll-app {
   }
 }
 
+/* === V39: 阅读进度条(右侧垂直) === */
+.read-progress {
+  position: fixed;
+  right: 6px;
+  top: 70px;
+  bottom: 6px;
+  width: 4px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 2px;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.read-progress.visible { opacity: 1; }
+.read-progress .fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: height 0.08s linear;
+}
+.read-progress .pct {
+  position: absolute;
+  right: 10px;
+  transform: translateY(-50%);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  padding: 1px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .read-progress {
+    right: 4px;
+    width: 3px;
+  }
+}
+}
+
 .main {
   display: flex;
   flex-direction: column;
@@ -1144,4 +1190,135 @@ ll-app {
   8%   { opacity: 1; }
   82%  { opacity: 1; }
   100% { opacity: 0; }
+}
+
+/* === V39: 阅读进度条 === */
+.read-progress {
+  position: fixed;
+  right: 6px;
+  top: 70px;
+  bottom: 6px;
+  width: 4px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 2px;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.read-progress.visible { opacity: 1; }
+.read-progress .fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: height 0.08s linear;
+  box-shadow: 0 0 6px var(--accent);
+}
+.read-progress .pct {
+  position: absolute;
+  right: 10px;
+  transform: translateY(-50%);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  font-family: var(--mono-font-family, monospace);
+}
+@media (max-width: 720px) {
+  .read-progress { right: 4px; width: 3px; }
+  .read-progress .pct { font-size: 10px; padding: 1px 4px; right: 7px; }
+}
+
+/* === V39: 历史面板 === */
+.hist-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--dim);
+  background: rgba(0, 0, 0, 0.15);
+}
+.hist-count { font-family: var(--mono-font-family, monospace); }
+.hist-clear-all {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.hist-clear-all:hover,
+.hist-clear-all:active {
+  border-color: var(--err);
+  color: var(--err);
+}
+
+.hist-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s;
+}
+.hist-row.clickable { cursor: pointer; }
+.hist-row.clickable:hover,
+.hist-row.clickable:active {
+  background: rgba(0, 255, 170, 0.06);
+}
+.hist-row.disabled {
+  opacity: 0.55;
+}
+
+.hist-icon {
+  flex: 0 0 28px;
+  font-size: 20px;
+  text-align: center;
+}
+.hist-info {
+  flex: 1;
+  min-width: 0;
+}
+.hist-name {
+  font-size: 14px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hist-meta {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hist-remove {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  font-size: 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.hist-remove:hover,
+.hist-remove:active {
+  background: var(--err);
+  color: white;
 }

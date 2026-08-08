@@ -21,10 +21,25 @@ export interface CachedWelcome {
   hash: string;
 }
 
+/** V39: 打开历史(笔记 + 本地文件) */
+export interface HistoryEntry {
+  id: string;          // 主键:笔记用 path,本地文件用 sha1(name+size+mtime) 生成的伪 id
+  type: 'note' | 'local';
+  name: string;        // 显示用
+  path?: string;       // 笔记的 vault 路径
+  ext?: string;        // 本地文件扩展名
+  size: number;        // 字节
+  openedAt: number;    // 最近打开时间戳
+  /** 备份:本地文件本身的快照(最大 512KB 写库,大了只存元信息) */
+  bytes?: Uint8Array;
+  mimeType?: string;
+}
+
 class LeoLiaoDB extends Dexie {
   manifest!: Table<ManifestEntry, string>;
   notes!: Table<CachedNote, string>;
   welcome!: Table<CachedWelcome, string>;
+  history!: Table<HistoryEntry, string>;
 
   constructor() {
     super('leoliao');
@@ -37,6 +52,13 @@ class LeoLiaoDB extends Dexie {
       manifest: 'path, mtime, hash',
       notes: 'path, mtime, cachedAt',
       welcome: 'name, hash',
+    });
+    // V39: 历史表
+    this.version(3).stores({
+      manifest: 'path, mtime, hash',
+      notes: 'path, mtime, cachedAt',
+      welcome: 'name, hash',
+      history: 'id, type, openedAt',
     });
   }
 }
@@ -116,4 +138,39 @@ export async function cacheStats(): Promise<{ manifestCount: number; noteCount: 
     noteCount: n.length,
     totalSize: n.reduce((s, x) => s + x.content.length, 0),
   };
+}
+
+/* === V39: 历史记录 === */
+
+const HISTORY_MAX = 30;          // 最多保留 30 条
+const HISTORY_LOCAL_SNAPSHOT_MAX = 512 * 1024; // 本地文件 > 512KB 不存快照,只存元信息
+
+/** 添加一条历史(同 id 走 update,openedAt 推到最新)。
+ *  保留最近 HISTORY_MAX 条,旧条目自动剔除。 */
+export async function addHistory(entry: HistoryEntry): Promise<void> {
+  await db().history.put(entry);
+  // 裁剪:按 openedAt 倒序,删多余
+  const all = await db().history.orderBy('openedAt').reverse().toArray();
+  if (all.length > HISTORY_MAX) {
+    const toDelete = all.slice(HISTORY_MAX).map((e) => e.id);
+    await db().history.bulkDelete(toDelete);
+  }
+}
+
+/** 取最近 N 条历史(默认全部) */
+export async function getRecentHistory(limit = HISTORY_MAX): Promise<HistoryEntry[]> {
+  return await db().history.orderBy('openedAt').reverse().limit(limit).toArray();
+}
+
+export async function deleteHistory(id: string): Promise<void> {
+  await db().history.delete(id);
+}
+
+export async function clearHistory(): Promise<void> {
+  await db().history.clear();
+}
+
+/** 判断本地文件快照要不要入库(太大不入库,节省空间) */
+export function shouldSnapshotLocal(size: number): boolean {
+  return size <= HISTORY_LOCAL_SNAPSHOT_MAX;
 }

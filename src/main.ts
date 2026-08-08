@@ -8,9 +8,10 @@ import './components/settings-panel';
 import './components/help-panel';
 import './components/share-panel';
 import './components/file-viewer';
+import './components/history-panel';
 import type { ManifestEntry, NoteFile, SyncStatus } from './types';
 import { sync as doSync, getNote } from './services/sync';
-import { cacheStats } from './services/db';
+import { cacheStats, addHistory } from './services/db';
 import { loadSettings, applySettings, type ThemeSettings } from './services/settings';
 import { pickAndOpenFile, type OpenedFile } from './services/file-opener';
 import { saveToLocal } from './services/export-service';
@@ -34,6 +35,8 @@ export class LlApp extends LitElement {
   @state() private showSettings = false;
   @state() private showShare = false;
   @state() private showHelp = false;
+  // V39: 历史 modal
+  @state() private showHistory = false;
   @state() private localFile: OpenedFile | null = null;
   @state() private openingFile = false;
   @state() private openingNote = false;  // V37: 打开笔记时的加载态,避免用户以为没反应又点一次
@@ -42,6 +45,9 @@ export class LlApp extends LitElement {
   // V38: 开机欢迎图
   @state() private welcomeImg: string | null = null;
   @state() private showWelcome = false;
+  // V39: 阅读进度
+  @state() private readProgress = 0;        // 0-100
+  @state() private readProgressVisible = false;
 
   async connectedCallback() {
     super.connectedCallback();
@@ -79,6 +85,44 @@ export class LlApp extends LitElement {
     super.disconnectedCallback();
   }
 
+  // V39: 阅读进度条 — 监听 .main 滚动,计算 0-100 进度
+  protected firstUpdated() {
+    const main = this.querySelector('.main') as HTMLElement | null;
+    if (main) {
+      main.addEventListener('scroll', () => this.updateReadProgress(main), { passive: true });
+    }
+  }
+
+  private updateReadProgress(main: HTMLElement) {
+    const max = main.scrollHeight - main.clientHeight;
+    if (max <= 0) {
+      // 内容比视区短:不显示进度条
+      if (this.readProgressVisible) {
+        this.readProgressVisible = false;
+      }
+      return;
+    }
+    const pct = Math.round((main.scrollTop / max) * 100);
+    const visible = this.currentNote !== null || this.localFile !== null;
+    if (pct !== this.readProgress || visible !== this.readProgressVisible) {
+      this.readProgress = pct;
+      this.readProgressVisible = visible;
+    }
+  }
+
+  /** V39: 切换笔记/本地文件时重置进度到顶部,并重算可见性 */
+  private resetReadProgress() {
+    this.readProgress = 0;
+    this.readProgressVisible = this.currentNote !== null || this.localFile !== null;
+    requestAnimationFrame(() => {
+      const main = this.querySelector('.main') as HTMLElement | null;
+      if (main) {
+        main.scrollTop = 0;
+        this.updateReadProgress(main);
+      }
+    });
+  }
+
   private async runSync() {
     this.status = 'syncing';
     this.errorMsg = '';
@@ -103,6 +147,16 @@ export class LlApp extends LitElement {
       const note = await getNote(path);
       if (note) {
         this.currentNote = note;
+        this.resetReadProgress();
+        // V39: 记一笔历史(失败也不阻塞)
+        addHistory({
+          id: path,
+          type: 'note',
+          name: path.split('/').pop() || path,
+          path,
+          size: note.content?.length ?? 0,
+          openedAt: Date.now(),
+        }).catch((e) => console.warn('[history] addNote:', e));
       } else {
         this.errorMsg = `未找到笔记: ${path}`;
       }
@@ -122,6 +176,21 @@ export class LlApp extends LitElement {
         this.localFile = file;
         this.currentNote = null;  // 互斥:打开本地文件时清掉当前笔记
         this.selectedPath = '';
+        this.resetReadProgress();
+        // V39: 历史快照(<=512KB 才存 bytes,大的只存元信息)
+        const { shouldSnapshotLocal } = await import('./services/db');
+        const snapshot = shouldSnapshotLocal(file.size) ? file.bytes : undefined;
+        const histId = `local:${file.name}:${file.size}`;
+        addHistory({
+          id: histId,
+          type: 'local',
+          name: file.name,
+          ext: file.ext,
+          size: file.size,
+          openedAt: Date.now(),
+          bytes: snapshot,
+          mimeType: file.mimeType,
+        }).catch((e) => console.warn('[history] addLocal:', e));
       }
     } catch (e: any) {
       this.errorMsg = `打开文件失败: ${e?.message || e}`;
@@ -133,6 +202,7 @@ export class LlApp extends LitElement {
 
   private closeLocalFile() {
     this.localFile = null;
+    this.readProgressVisible = false;
   }
 
   /** V36.1: 保存当前笔记(Web 选位置;Android 写 Documents/knowledge-base/) */
@@ -193,6 +263,21 @@ export class LlApp extends LitElement {
     } catch (err) {
       console.error('[main] handleSelect ERROR:', err);
     }
+  }
+
+  // V39: 从历史面板收到事件 — 打开笔记
+  private async handleHistoryOpenNote(e: Event) {
+    const path = (e as CustomEvent<string>).detail;
+    await this.openNote(path);
+  }
+
+  // V39: 从历史面板收到事件 — 恢复本地文件快照
+  private handleHistoryOpenLocal(e: Event) {
+    const file = (e as CustomEvent<OpenedFile>).detail;
+    this.localFile = file;
+    this.currentNote = null;
+    this.selectedPath = '';
+    this.resetReadProgress();
   }
 
   private async handleWikilink(e: Event) {
@@ -267,10 +352,11 @@ export class LlApp extends LitElement {
   // V29: ESC 键关 modal/侧栏
   private handleKeydown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
-      if (this.showSettings || this.showShare || this.showHelp) {
+      if (this.showSettings || this.showShare || this.showHelp || this.showHistory) {
         this.showSettings = false;
         this.showShare = false;
         this.showHelp = false;
+        this.showHistory = false;
       } else if (this.sidebarOpen) {
         this.sidebarOpen = false;
       }
@@ -285,11 +371,17 @@ export class LlApp extends LitElement {
           <img src=${this.welcomeImg} alt="欢迎" />
         </div>
       ` : null}
-      <div class="layout ${this.sidebarOpen ? 'sidebar-open' : ''} ${this.showSettings || this.showShare || this.showHelp ? 'modal-open' : ''}">
+      <div class="layout ${this.sidebarOpen ? 'sidebar-open' : ''} ${this.showSettings || this.showShare || this.showHelp || this.showHistory ? 'modal-open' : ''}">
 
         ${this.sidebarOpen ? html`
           <div class="sidebar-overlay" @click=${() => this.sidebarOpen = false}></div>
         ` : null}
+
+        <!-- V39: 阅读进度条(右侧固定) -->
+        <div class="read-progress ${this.readProgressVisible ? 'visible' : ''}">
+          <div class="fill" style="height: ${this.readProgress}%;"></div>
+          <div class="pct" style="top: ${this.readProgress}%;">${this.readProgress}%</div>
+        </div>
 
         <button
           class="sidebar-toggle ${(this.currentNote || this.localFile) ? 'dim' : ''}"
@@ -348,6 +440,8 @@ export class LlApp extends LitElement {
               <button class="toolbar-btn" title="打开本地文件(md/html/txt/图片/docx)" @click=${() => this.openLocalFile()} ?disabled=${this.openingFile}>
                 ${this.openingFile ? '⏳' : '📂'}
               </button>
+              <!-- V39: 历史记录 -->
+              <button class="toolbar-btn" title="历史打开过的笔记/文件" @click=${() => this.showHistory = true}>🕘</button>
               <button class="toolbar-btn" title="保存到本地" @click=${() => this.saveNote()}>💾</button>
               <button class="toolbar-btn" title="设置" @click=${() => { this.showSettings = true; this.showShare = false; this.showHelp = false; }}>⚙️</button>
               <button class="toolbar-btn" title="分享" @click=${() => { this.showShare = true; this.showSettings = false; this.showHelp = false; }}>↗️</button>
@@ -433,6 +527,14 @@ export class LlApp extends LitElement {
           <ll-help-panel
             @close=${() => this.showHelp = false}
           ></ll-help-panel>
+        ` : null}
+
+        ${this.showHistory ? html`
+          <ll-history-panel
+            @close=${() => this.showHistory = false}
+            @open-note=${(e: CustomEvent<string>) => this.handleHistoryOpenNote(e)}
+            @open-local=${(e: CustomEvent<OpenedFile>) => this.handleHistoryOpenLocal(e)}
+          ></ll-history-panel>
         ` : null}
 
       </div>

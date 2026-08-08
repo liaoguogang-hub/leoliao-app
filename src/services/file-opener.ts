@@ -8,6 +8,8 @@
  *   3. 按扩展名分发到对应渲染器
  *
  * pptx 不做(无客户端方案)
+ *
+ * V39:新增 renderBytesToHtml(history 快照恢复)— 用历史里存的 Uint8Array 重新打开
  */
 
 import { FilePicker, PickedFile } from '@capawesome/capacitor-file-picker';
@@ -91,21 +93,42 @@ async function readAndRender(picked: PickedFile): Promise<OpenedFile> {
     };
   }
 
-  const bytes = base64ToUint8Array(base64);
+  // 直接把 base64 透传给 renderBytes,里面会自己解
+  return renderBytes({ name, ext, mimeType, bytes: base64 });
+}
+
+/** V39: 给历史快照用 — 已经有 Uint8Array,直接渲染 */
+export async function renderBytesToHtml(info: {
+  name: string;
+  ext?: string;
+  size: number;
+  bytes?: Uint8Array;
+  mimeType?: string;
+}): Promise<OpenedFile | null> {
+  if (!info.bytes || info.bytes.byteLength === 0) return null;
+  const base64 = uint8ArrayToBase64(info.bytes);
+  const ext = (info.ext || info.name.split('.').pop() || '').toLowerCase();
+  const mimeType = info.mimeType || guessMime(ext);
+  return renderBytes({ name: info.name, ext, mimeType, bytes: base64 });
+}
+
+/** 内部:用 base64 串走主要渲染路径 */
+async function renderBytes(info: { name: string; ext: string; mimeType: string; bytes: string | Uint8Array }): Promise<OpenedFile> {
+  const { name, ext, mimeType } = info;
+  const base64 = typeof info.bytes === 'string' ? info.bytes : uint8ArrayToBase64(info.bytes);
+  const bytes = typeof info.bytes === 'string' ? base64ToUint8Array(info.bytes) : info.bytes;
 
   try {
     switch (ext) {
       case 'md':
       case 'markdown': {
         const text = new TextDecoder('utf-8').decode(bytes);
-        // 用 markdown-it 渲染(纯渲染,不带 wikilink/callout,本地文件不需要)
         const html = localMd.render(text);
         return makeFile(name, ext, mimeType, bytes, text, html, 'local');
       }
       case 'html':
       case 'htm': {
         const text = new TextDecoder('utf-8').decode(bytes);
-        // ⚠️ XSS 防护:必须 DOMPurify 清理
         const safe = DOMPurify.sanitize(text, { USE_PROFILES: { html: true } });
         return makeFile(name, ext, mimeType, bytes, text, safe, 'local');
       }
@@ -124,14 +147,10 @@ async function readAndRender(picked: PickedFile): Promise<OpenedFile> {
         return makeFile(name, ext, mimeType, bytes, undefined, html, 'local');
       }
       case 'docx': {
-        // ⚠️ mammoth 需要 ArrayBuffer,不是 Uint8Array
         console.log('[file-opener] docx 开始转换, size=', bytes.byteLength, 'name=', name);
         try {
           const buffer = bytesToArrayBuffer(bytes);
-          console.log('[file-opener] docx ArrayBuffer 准备完毕, byteLength=', buffer.byteLength);
           const result = await mammoth.convertToHtml({ arrayBuffer: buffer });
-          console.log('[file-opener] docx 转换成功, html 长度=', result.value?.length, 'messages=', result.messages?.length);
-          // 警告列表(忽略样式丢失等)
           const warnings = result.messages.length
             ? `<div class="file-warn">⚠️ docx 渲染警告:${result.messages.length} 条(可能丢排版细节)</div>`
             : '';
@@ -142,20 +161,13 @@ async function readAndRender(picked: PickedFile): Promise<OpenedFile> {
           );
         } catch (e: any) {
           console.error('[file-opener] docx 转换失败:', e);
-          console.error('[file-opener] docx 错误堆栈:', e?.stack);
           return makeFile(
             name, ext, mimeType, bytes, undefined,
             `<div class="file-error">
               <strong>⚠️ docx 转换失败</strong><br>
               错误:${escapeHtml(e?.message || String(e))}<br>
               类型:${escapeHtml(e?.name || '?')}<br>
-              ${e?.stack ? `<pre style="white-space:pre-wrap;font-size:11px;margin-top:8px">${escapeHtml(String(e.stack).slice(0, 800))}</pre>` : ''}
-              <p style="margin-top:8px;font-size:13px">
-                💡 排查建议:<br>
-                1. 用 chrome://inspect 查 console 完整错误<br>
-                2. 试一个简单的 docx 文件(从 Word 另存为 .docx)<br>
-                3. docx 文件可能损坏
-              </p>
+              <p style="margin-top:8px;font-size:13px">💡 docx 文件可能损坏</p>
             </div>`,
             'local',
             `docx 转换失败: ${e?.message || e}`
@@ -165,9 +177,9 @@ async function readAndRender(picked: PickedFile): Promise<OpenedFile> {
       case 'pdf':
         return makeFile(
           name, ext, mimeType, bytes, undefined,
-          `<div class="file-warn">📕 PDF 渲染尚未支持(V35 计划),请用 WPS 打开</div>`,
+          `<div class="file-warn">📕 PDF 渲染尚未支持,请用 WPS 打开</div>`,
           'local',
-          'PDF 渲染待 V35 实现,本版本暂不支持'
+          'PDF 暂不支持'
         );
       case 'ppt':
       case 'pptx':
@@ -244,8 +256,16 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000; // 32KB chunks,防 atob/btoa stack overflow
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunk)));
+  }
+  return btoa(binary);
+}
+
 function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  // 复制到新的 ArrayBuffer(mammoth 不能直接拿 Uint8Array 的 buffer 因为可能是 SharedArrayBuffer)
   const buffer = new ArrayBuffer(bytes.byteLength);
   new Uint8Array(buffer).set(bytes);
   return buffer;
