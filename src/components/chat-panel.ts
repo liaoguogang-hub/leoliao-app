@@ -14,13 +14,18 @@ import { LitElement, html, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { PROVIDERS, PROVIDER_LIST, type ProviderId } from '../lib/llm-providers';
 import { chatStream, testConnection, type ChatMessage, type LLMSettings } from '../lib/llm';
-import { search as kbSearch, buildRAGPrompt, type SearchResult } from '../lib/search';
+import { search as kbSearch, buildFullRAGPrompt, type SearchResult } from '../lib/search';
+import { webSearch, WEB_PROVIDER_LIST, type WebSearchSettings } from '../lib/web-search';
 import { loadLLMSettings, saveLLMSettings } from '../services/llm-settings';
+import { loadWebSettings, saveWebSettings } from '../services/web-settings';
 import { getChatHistory, appendChatMessage, clearChatHistory } from '../services/db';
+
+interface WebResult { title: string; url: string; content: string }
 
 interface UiMessage extends ChatMessage {
   id: number;
-  citations?: SearchResult[];
+  kbCitations?: SearchResult[];
+  webCitations?: WebResult[];
   streaming?: boolean;
   error?: string;
 }
@@ -31,16 +36,19 @@ export class LlChatPanel extends LitElement {
 
   @state() private open = false;
   @state() private settings!: LLMSettings;
+  @state() private web!: WebSearchSettings;
   @state() private showSettings = false;
   @state() private messages: UiMessage[] = [];
   @state() private input = '';
   @state() private sending = false;
   @state() private useKB = true;             // 是否启用 KB 检索（RAG 模式）
+  @state() private useWeb = false;           // 是否启用联网搜索
   @state() private testStatus: { ok: boolean; msg: string } | null = null;
 
   async connectedCallback() {
     super.connectedCallback();
     this.settings = loadLLMSettings();
+    this.web = loadWebSettings();
     await this.loadHistory();
   }
 
@@ -52,7 +60,7 @@ export class LlChatPanel extends LitElement {
         id: r.id!,
         role: r.role as 'user' | 'assistant',
         content: r.content,
-        citations: r.citations ? JSON.parse(r.citations) : undefined,
+        kbCitations: r.citations ? JSON.parse(r.citations) : undefined,  // 兼容老数据
       }));
   }
 
@@ -96,15 +104,25 @@ export class LlChatPanel extends LitElement {
     this.messages = [...this.messages, userMsg];
     await appendChatMessage({ role: 'user', content: q });
 
-    // 2) KB 检索 + RAG prompt（如果启用）
+    // 2) KB 检索 + 联网搜索（按开关）
     let ragSystem: string | undefined;
     let ragUser: string | undefined;
-    let citations: SearchResult[] = [];
+    let kbCitations: SearchResult[] = [];
+    let webCitations: WebResult[] = [];
     if (this.useKB) {
-      citations = await kbSearch(q, 5);
-      const rag = buildRAGPrompt(q, citations);
+      kbCitations = await kbSearch(q, 5);
+    }
+    if (this.useWeb && this.web.url) {
+      try {
+        webCitations = await webSearch(q, this.web);
+      } catch (e) {
+        console.warn('web search failed', e);
+      }
+    }
+    if (kbCitations.length > 0 || webCitations.length > 0) {
+      const rag = buildFullRAGPrompt(q, kbCitations, webCitations);
       ragSystem = rag.system;
-      ragUser = rag.user;          // KB 检索结果拼到 user 消息里
+      ragUser = rag.user;
     }
 
     // 3) 助手消息占位（id 先给 0，stream 完成后回填真实 id）
@@ -113,7 +131,8 @@ export class LlChatPanel extends LitElement {
       role: 'assistant',
       content: '',
       streaming: true,
-      citations,
+      kbCitations,
+      webCitations,
     };
     this.messages = [...this.messages, assistantMsg];
     this.sending = true;
@@ -126,7 +145,7 @@ export class LlChatPanel extends LitElement {
       .filter(m => m.id !== 0 && m.role !== 'system')   // 排除本次未持久化的占位
       .slice(-16)
       .map(m => ({ role: m.role, content: m.content }));
-    // RAG 模式：最后一条 user 用 KB 增强版（ragUser）
+    // RAG 模式：最后一条 user 用 KB+Web 增强版（ragUser）
     if (ragUser && recent.length > 0 && recent[recent.length - 1].role === 'user') {
       recent[recent.length - 1] = { role: 'user', content: ragUser };
     }
@@ -138,7 +157,6 @@ export class LlChatPanel extends LitElement {
       const stream = chatStream(messages, this.settings);
       for await (const delta of stream) {
         fullText += delta;
-        // 直接更新最后一个助手消息的 content
         const idx = this.messages.length - 1;
         const updated = [...this.messages];
         updated[idx] = { ...updated[idx], content: fullText };
@@ -157,10 +175,12 @@ export class LlChatPanel extends LitElement {
     this.messages = this.messages.map((m, i) =>
       i === this.messages.length - 1 ? finalAssistant : m
     );
+    // 把 kb+web 引用都存到 db（兼容老字段 citations）
+    const citationsBlob = JSON.stringify({ kb: kbCitations, web: webCitations });
     await appendChatMessage({
       role: 'assistant',
       content: fullText,
-      citations: JSON.stringify(citations),
+      citations: citationsBlob,
     });
     this.sending = false;
   }
@@ -225,13 +245,53 @@ export class LlChatPanel extends LitElement {
               @change=${(e: Event) => { this.useKB = (e.target as HTMLInputElement).checked; }} />
             启用知识库检索（RAG）
           </label>
+          <label class="checkbox-label" style="margin-left:16px">
+            <input type="checkbox" .checked=${this.useWeb}
+              @change=${(e: Event) => { this.useWeb = (e.target as HTMLInputElement).checked; }} />
+            启用联网搜索
+          </label>
         </div>
+
+        ${this.useWeb ? html`
+          <div class="setting-row">
+            <label>Web Provider</label>
+            <select @change=${(e: Event) => {
+              const id = (e.target as HTMLSelectElement).value as any;
+              this.web = { ...this.web, provider: id, url: this.web.url || WEB_PROVIDER_LIST.find(p => p.id === id)!.defaultUrl };
+              saveWebSettings(this.web);
+            }}>
+              ${WEB_PROVIDER_LIST.map(p => html`<option value=${p.id} ?selected=${this.web.provider === p.id}>${p.label}</option>`)}
+            </select>
+          </div>
+          <div class="setting-row">
+            <label>Web URL</label>
+            <input type="text" .value=${this.web.url} placeholder="https://..."
+              @input=${(e: Event) => { this.web = { ...this.web, url: (e.target as HTMLInputElement).value }; saveWebSettings(this.web); }} />
+          </div>
+          ${this.web.provider !== 'duckduckgo' && this.web.provider !== 'searxng' ? html`
+            <div class="setting-row">
+              <label>Web API Key</label>
+              <input type="password" .value=${this.web.apiKey} placeholder="可选" autocomplete="off"
+                @input=${(e: Event) => { this.web = { ...this.web, apiKey: (e.target as HTMLInputElement).value }; saveWebSettings(this.web); }} />
+            </div>
+          ` : nothing}
+          <div class="setting-row">
+            <label>最大结果数</label>
+            <input type="number" min="1" max="10" .value=${String(this.web.maxResults)}
+              @input=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value); if (v >= 1) { this.web = { ...this.web, maxResults: v }; saveWebSettings(this.web); } }} />
+          </div>
+        ` : nothing}
       </div>
     `;
   }
 
   private renderMessage(m: UiMessage, idx: number) {
     const isUser = m.role === 'user';
+    const kb = m.kbCitations || [];
+    const web = m.webCitations || [];
+    // 兼容老数据：citations 字段可能含数组
+    const legacy = (m as any).citations;
+    const legacyArr: any[] = Array.isArray(legacy) ? legacy : (legacy?.kb || []);
     return html`
       <div class="chat-msg ${isUser ? 'user' : 'assistant'}${m.error ? ' error' : ''}" data-idx=${idx}>
         <div class="chat-msg-meta">
@@ -239,10 +299,13 @@ export class LlChatPanel extends LitElement {
           ${m.streaming ? html`<span class="chat-msg-streaming">●</span>` : nothing}
         </div>
         <div class="chat-msg-content">${m.content}</div>
-        ${m.citations && m.citations.length > 0 ? html`
+        ${(kb.length > 0 || web.length > 0 || legacyArr.length > 0) ? html`
           <div class="chat-msg-citations">
-            ${m.citations.map((c, i) => html`
-              <span class="citation" @click=${() => this.dispatchEvent(new CustomEvent('open-citation', { detail: c.path, bubbles: true, composed: true }))}>[${i + 1}] ${c.title}</span>
+            ${kb.map((c, i) => html`
+              <span class="citation kb" title=${c.path} @click=${() => this.dispatchEvent(new CustomEvent('open-citation', { detail: c.path, bubbles: true, composed: true }))}>[KB${i + 1}] ${c.title}</span>
+            `)}
+            ${web.map((c, i) => html`
+              <a class="citation web" href=${c.url} target="_blank" rel="noopener">[Web${i + 1}] ${c.title}</a>
             `)}
           </div>
         ` : nothing}

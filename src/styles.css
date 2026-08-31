@@ -1610,3 +1610,18 @@ ll-app {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* v1-M2: 联网搜索引用样式 */
+.citation.kb {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.citation.web {
+  border-color: #d09030;
+  color: #d09030;
+  text-decoration: none;
+}
+.citation.web:hover {
+  background: #d09030;
+  color: var(--bg);
+}

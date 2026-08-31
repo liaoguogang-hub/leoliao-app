@@ -170,3 +170,48 @@ export function buildRAGPrompt(query: string, results: SearchResult[]): { system
 
   return { system, user };
 }
+
+/** 把 KB 检索 + 联网结果 一起组装成 RAG prompt（v1-M2） */
+export function buildFullRAGPrompt(
+  query: string,
+  kbResults: SearchResult[],
+  webResults: Array<{ title: string; url: string; content: string }>
+): { system: string; user: string } {
+  const parts: string[] = [];
+  if (kbResults.length > 0) {
+    parts.push('## 知识库检索结果（本地笔记）');
+    parts.push(
+      kbResults.map((r, i) => {
+        const snip = r.snippet.length > 600 ? r.snippet.slice(0, 600) + '...' : r.snippet;
+        return `[KB#${i + 1}] 标题: ${r.title}\n路径: ${r.path}\n内容: ${snip}`;
+      }).join('\n\n---\n\n')
+    );
+  }
+  if (webResults.length > 0) {
+    parts.push('## 联网搜索结果');
+    parts.push(
+      webResults.map((r, i) => {
+        const snip = r.content.length > 600 ? r.content.slice(0, 600) + '...' : r.content;
+        return `[Web#${i + 1}] 标题: ${r.title}\nURL: ${r.url}\n摘要: ${snip}`;
+      }).join('\n\n---\n\n')
+    );
+  }
+
+  const sourcesDesc: string[] = [];
+  if (kbResults.length > 0) sourcesDesc.push('本地知识库 [KB#1] [KB#2]...');
+  if (webResults.length > 0) sourcesDesc.push('联网 [Web#1] [Web#2]...');
+
+  const system = `你是 LeoLiao 知识库助手。基于下面检索结果回答用户问题。
+规则:
+1. 优先使用检索结果回答（${sourcesDesc.join(' / ')}）
+2. 如果所有检索结果都不含答案,明确说"未找到相关信息",不要编造
+3. 回答末尾用"参考来源: [KB#1] [Web#2]..."格式列出引用
+4. 简洁,1-3 段,不要长篇大论
+5. 用户用中文就回中文,英文就回英文`;
+
+  const user = parts.length > 0
+    ? `【问题】\n${query}\n\n${parts.join('\n\n')}`
+    : `【问题】\n${query}\n\n（无任何检索结果 — 凭已有知识回答,或说明无法回答）`;
+
+  return { system, user };
+}
