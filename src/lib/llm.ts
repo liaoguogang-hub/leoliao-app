@@ -12,6 +12,8 @@
 
 import { PROVIDERS, type ProviderId } from './llm-providers';
 
+export { PROVIDERS, type ProviderId } from './llm-providers';
+
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -30,8 +32,8 @@ interface OpenAIRequest {
   model: string;
   messages: ChatMessage[];
   stream: boolean;
-  temperature?: number;
-  max_tokens?: number;
+  temperature: number;
+  max_tokens: number;
 }
 
 interface AnthropicRequest {
@@ -123,7 +125,7 @@ export async function* chatStream(
   if (!res.body) {
     // 极少数环境（老 WebView）没 ReadableStream，降级
     const text = await res.text();
-    yield* parseSSE(text, provider.isAnthropic);
+    yield* parseSSE(text, !!provider.isAnthropic);
     return;
   }
   const reader = res.body.getReader();
@@ -211,7 +213,7 @@ function toAnthropicRequest(messages: ChatMessage[], settings: LLMSettings): Omi
 /** 验证 provider+url+key 是否有效（发一个 1 token 的 ping） */
 export async function testConnection(settings: LLMSettings): Promise<{ ok: boolean; error?: string; model?: string }> {
   try {
-    const reply = await chatOnce(
+    await chatOnce(
       [{ role: 'user', content: 'ping' }],
       { ...settings, maxTokens: 8, temperature: 0 }
     );

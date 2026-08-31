@@ -13,10 +13,10 @@
 import { LitElement, html, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { PROVIDERS, PROVIDER_LIST, type ProviderId } from '../lib/llm-providers';
-import { chatStream, chatOnce, testConnection, type ChatMessage, type LLMSettings } from '../lib/llm';
+import { chatStream, testConnection, type ChatMessage, type LLMSettings } from '../lib/llm';
 import { search as kbSearch, buildRAGPrompt, type SearchResult } from '../lib/search';
 import { loadLLMSettings, saveLLMSettings } from '../services/llm-settings';
-import { getChatHistory, appendChatMessage, clearChatHistory, type ChatMessageRow } from '../services/db';
+import { getChatHistory, appendChatMessage, clearChatHistory } from '../services/db';
 
 interface UiMessage extends ChatMessage {
   id: number;
@@ -94,7 +94,7 @@ export class LlChatPanel extends LitElement {
     // 1) 用户消息入库 + 上屏
     const userMsg: UiMessage = { id: 0, role: 'user', content: q };
     this.messages = [...this.messages, userMsg];
-    const userRow = await appendChatMessage({ role: 'user', content: q });
+    await appendChatMessage({ role: 'user', content: q });
 
     // 2) KB 检索 + RAG prompt（如果启用）
     let ragSystem: string | undefined;
@@ -104,7 +104,7 @@ export class LlChatPanel extends LitElement {
       citations = await kbSearch(q, 5);
       const rag = buildRAGPrompt(q, citations);
       ragSystem = rag.system;
-      ragUser = rag.user;
+      ragUser = rag.user;          // KB 检索结果拼到 user 消息里
     }
 
     // 3) 助手消息占位（id 先给 0，stream 完成后回填真实 id）
@@ -126,6 +126,10 @@ export class LlChatPanel extends LitElement {
       .filter(m => m.id !== 0 && m.role !== 'system')   // 排除本次未持久化的占位
       .slice(-16)
       .map(m => ({ role: m.role, content: m.content }));
+    // RAG 模式：最后一条 user 用 KB 增强版（ragUser）
+    if (ragUser && recent.length > 0 && recent[recent.length - 1].role === 'user') {
+      recent[recent.length - 1] = { role: 'user', content: ragUser };
+    }
     messages.push(...recent);
 
     // 5) 流式请求

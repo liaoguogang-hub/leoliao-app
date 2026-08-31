@@ -4,7 +4,7 @@
  * 与主题设置 (kb-settings) 分开存，避免格式冲突
  */
 
-import { PROVIDERS, type LLMSettings as _LLMSettings, type ProviderId } from '../lib/llm';
+import { PROVIDERS, type LLMSettings as _LLMSettings } from '../lib/llm';
 export type LLMSettings = _LLMSettings;
 
 const KEY = 'kb-llm-settings';

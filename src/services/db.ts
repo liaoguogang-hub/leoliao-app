@@ -85,7 +85,7 @@ export interface ChatMessageRow {
 
 let _db: LeoLiaoDB | null = null;
 
-function db(): LeoLiaoDB {
+export function db(): LeoLiaoDB {
   if (!_db) _db = new LeoLiaoDB();
   return _db;
 }
