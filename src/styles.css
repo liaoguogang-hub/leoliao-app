@@ -1351,20 +1351,21 @@ ll-app {
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;        /* 顶部对齐,占满整个屏幕高度 */
   justify-content: center;
   z-index: 200;
-  padding: 20px;
+  padding: 0 20px;                 /* 去掉上下 padding,顶部对齐工具栏 */
 }
 
 .chat-modal {
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  /* border-radius: 12px; */       /* 占满屏幕时不要圆角 */
   width: 100%;
   max-width: 720px;
-  height: 85vh;
+  height: 100vh;                   /* 占满整个屏幕高度 */
+  max-height: 100vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
@@ -1566,6 +1567,35 @@ ll-app {
 .citation:hover {
   background: var(--accent);
   color: var(--bg);
+}
+
+/* RAG 状态标签 — 让用户看到 KB/Web 检索是否真的工作 */
+.chat-msg-rag {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+}
+.rag-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--border);
+  color: var(--dim);
+}
+.rag-tag.ok {
+  background: rgba(50, 180, 100, 0.15);
+  color: #2d9d5f;
+}
+.rag-tag.miss {
+  background: rgba(220, 160, 50, 0.15);
+  color: #b58230;
+}
+.rag-tag.off {
+  background: rgba(120, 120, 120, 0.15);
+  color: var(--dim);
 }
 
 .chat-input {

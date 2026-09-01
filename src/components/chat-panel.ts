@@ -18,7 +18,7 @@ import { search as kbSearch, buildFullRAGPrompt, type SearchResult } from '../li
 import { webSearch, WEB_PROVIDER_LIST, type WebSearchSettings } from '../lib/web-search';
 import { loadLLMSettings, saveLLMSettings } from '../services/llm-settings';
 import { loadWebSettings, saveWebSettings } from '../services/web-settings';
-import { getChatHistory, appendChatMessage, clearChatHistory } from '../services/db';
+import { getChatHistory, appendChatMessage, clearChatHistory, db } from '../services/db';
 
 interface WebResult { title: string; url: string; content: string }
 
@@ -28,6 +28,8 @@ interface UiMessage extends ChatMessage {
   webCitations?: WebResult[];
   streaming?: boolean;
   error?: string;
+  /** RAG/Web 状态标签：发送时快照,UI 直接展示,方便用户判断 RAG 是否真的工作 */
+  ragStatus?: { kb: number; web: number; useKB: boolean; useWeb: boolean };
 }
 
 @customElement('ll-chat-panel')
@@ -44,6 +46,7 @@ export class LlChatPanel extends LitElement {
   @state() private useKB = true;             // 是否启用 KB 检索（RAG 模式）
   @state() private useWeb = false;           // 是否启用联网搜索
   @state() private testStatus: { ok: boolean; msg: string } | null = null;
+  @state() private vaultNoteCount = 0;     // vault 已同步笔记数 (Dexie notes.count)
 
   async connectedCallback() {
     super.connectedCallback();
@@ -121,6 +124,10 @@ export class LlChatPanel extends LitElement {
       this.settings = { ...this.settings, maxTokens: 1024 };
     }
     await this.loadHistory();
+    // 加载 vault 笔记数，给 UI 显示"已同步 N 条"信息
+    try {
+      this.vaultNoteCount = await db().notes.count();
+    } catch {}
   }
 
   private async loadHistory() {
@@ -211,6 +218,7 @@ export class LlChatPanel extends LitElement {
       streaming: true,
       kbCitations,
       webCitations,
+      ragStatus: { kb: kbCitations.length, web: webCitations.length, useKB: this.useKB, useWeb: this.useWeb },
     };
     this.messages = [...this.messages, assistantMsg];
     this.sending = true;
@@ -369,6 +377,8 @@ export class LlChatPanel extends LitElement {
     // 兼容老数据：citations 字段可能含数组
     const legacy = (m as any).citations;
     const legacyArr: any[] = Array.isArray(legacy) ? legacy : (legacy?.kb || []);
+    // RAG 状态标签 — 让用户一眼看到 KB/Web 检索是否真在工作
+    const rag = m.ragStatus;
     return html`
       <div class="chat-msg ${isUser ? 'user' : 'assistant'}${m.error ? ' error' : ''}" data-idx=${idx}>
         <div class="chat-msg-meta">
@@ -384,6 +394,14 @@ export class LlChatPanel extends LitElement {
             ${web.map((c, i) => html`
               <a class="citation web" href=${c.url} target="_blank" rel="noopener">[Web${i + 1}] ${c.title}</a>
             `)}
+          </div>
+        ` : nothing}
+        ${rag && !isUser ? html`
+          <div class="chat-msg-rag">
+            ${rag.useKB
+              ? html`<span class="rag-tag ${rag.kb > 0 ? 'ok' : 'miss'}">${rag.kb > 0 ? '🟢' : '🟡'} RAG: ${rag.kb} KB hit${rag.kb === 1 ? '' : 's'}${rag.kb === 0 ? ' (知识库无匹配)' : ''}</span>`
+              : html`<span class="rag-tag off">⚪ RAG off</span>`}
+            ${rag.useWeb ? html`<span class="rag-tag ${rag.web > 0 ? 'ok' : 'miss'}">${rag.web > 0 ? '🟢' : '🟡'} Web: ${rag.web} hit${rag.web === 1 ? '' : 's'}</span>` : nothing}
           </div>
         ` : nothing}
       </div>
@@ -413,7 +431,8 @@ export class LlChatPanel extends LitElement {
               ${this.messages.length === 0 ? html`
                 <div class="chat-empty">
                   <p>👋 知识库助手就绪</p>
-                  <p class="dim">${this.useKB ? '已启用 RAG 检索，回答会基于 vault 内的笔记' : '未启用 RAG，纯对话模式'}</p>
+                  <p class="dim">${this.useKB ? '✅ RAG 已启用 · 回答会基于 vault 内的笔记' : '⚪ RAG 未启用 · 纯对话模式'}</p>
+                  <p class="dim">📚 vault: ${this.vaultNoteCount} notes synced</p>
                   <p class="dim">设置 → 填 API Key → 提问</p>
                 </div>
               ` : this.messages.map((m, i) => this.renderMessage(m, i))}
