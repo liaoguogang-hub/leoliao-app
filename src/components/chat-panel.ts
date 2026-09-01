@@ -214,12 +214,9 @@ export class LlChatPanel extends LitElement {
         <div class="setting-row">
           <label>模型</label>
           ${provider.models.length > 0 ? html`
-            <select @change=${(e: Event) => { this.settings = { ...s, model: (e.target as HTMLSelectElement).value }; this.persistSettings(); }}>
-              ${provider.models.map(m => html`<option value=${m} ?selected=${s.model === m}>${m}</option>`)}
+            <select style="flex:1" @change=${(e: Event) => { this.settings = { ...s, model: (e.target as HTMLSelectElement).value }; this.persistSettings(); }}>
+              ${provider.models.map(m => html`<option value=${m} ?selected=${s.model === m || (!provider.models.includes(s.model) && m === provider.models[0])}>${m}</option>`)}
             </select>
-            <input type="text" class="model-custom" .value=${provider.models.includes(s.model) ? '' : s.model}
-              placeholder="或自定义模型名"
-              @input=${(e: Event) => { const v = (e.target as HTMLInputElement).value.trim(); if (v) { this.settings = { ...s, model: v }; this.persistSettings(); } }} />
           ` : html`
             <input type="text" .value=${s.model} placeholder="模型名称"
               @input=${(e: Event) => { this.settings = { ...s, model: (e.target as HTMLInputElement).value }; this.persistSettings(); }} />
