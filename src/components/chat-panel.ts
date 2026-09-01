@@ -206,6 +206,8 @@ export class LlChatPanel extends LitElement {
     let ragUser: string | undefined;
     let kbCitations: SearchResult[] = [];
     let webCitations: WebResult[] = [];
+    // DEBUG: 看真实 useKB/useWeb 状态
+    console.log('[chat.send] q=', q, 'useKB=', this.useKB, 'useWeb=', this.useWeb, 'web.url=', this.web?.url);
     if (this.useKB) {
       // 不传 k，用 search.ts 默认 9999（实际全召回，按 BM25 分数排，受 30K 字符安全阀限制）
       kbCitations = await kbSearch(q);
@@ -217,6 +219,7 @@ export class LlChatPanel extends LitElement {
         console.warn('web search failed', e);
       }
     }
+    console.log('[chat.send] kbCitations=', kbCitations.length, 'webCitations=', webCitations.length);
     if (kbCitations.length > 0 || webCitations.length > 0) {
       const rag = buildFullRAGPrompt(q, kbCitations, webCitations);
       ragSystem = rag.system;
@@ -350,13 +353,13 @@ export class LlChatPanel extends LitElement {
 
         <div class="setting-row">
           <label class="checkbox-label">
-            <input type="checkbox" .checked=${this.useKB}
-              @change=${(e: Event) => { this.useKB = (e.target as HTMLInputElement).checked; }} />
+            <input type="checkbox" ?checked=${this.useKB}
+              @change=${(e: Event) => { this.useKB = (e.target as HTMLInputElement).checked; console.log('[chat] useKB →', this.useKB); }} />
             启用知识库检索（RAG）
           </label>
           <label class="checkbox-label" style="margin-left:16px">
-            <input type="checkbox" .checked=${this.useWeb}
-              @change=${(e: Event) => { this.useWeb = (e.target as HTMLInputElement).checked; }} />
+            <input type="checkbox" ?checked=${this.useWeb}
+              @change=${(e: Event) => { this.useWeb = (e.target as HTMLInputElement).checked; console.log('[chat] useWeb →', this.useWeb); }} />
             启用联网搜索
           </label>
         </div>
@@ -457,6 +460,7 @@ export class LlChatPanel extends LitElement {
                   <p>👋 知识库助手就绪</p>
                   <p class="dim">${this.useKB ? '✅ RAG 已启用 · 回答会基于 vault 内的笔记' : '⚪ RAG 未启用 · 纯对话模式'}</p>
                   <p class="dim">📚 vault: ${this.vaultNoteCount} notes synced</p>
+                  <p class="dim" style="font-family:ui-monospace,monospace;font-size:11px;opacity:0.6">[DEBUG] useKB=${this.useKB} useWeb=${this.useWeb} webUrl=${this.web?.url ? '已配置' : '空'}</p>
                   <p class="dim">设置 → 填 API Key → 提问</p>
                 </div>
               ` : this.messages.map((m, i) => this.renderMessage(m, i))}

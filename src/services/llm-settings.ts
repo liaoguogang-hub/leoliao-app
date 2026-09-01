@@ -15,7 +15,7 @@ const DEFAULTS: LLMSettings = {
   apiKey: '',
   model: PROVIDERS.deepseek.defaultModel,
   temperature: 0.3,             // 质量优先 (0.7 太随机,容易跑偏)
-  maxTokens: 16384,             // MiniMax-M3 上下文 1M,LLM thinking 阶段会消耗大量 token,给输出 16K 留足
+  maxTokens: 32768,             // MiniMax-M3 上下文 1M,LLM thinking 消耗大量 token,给输出 32K 留足
 };
 
 export function loadLLMSettings(): LLMSettings {
