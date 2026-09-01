@@ -78,7 +78,7 @@ export async function chatOnce(messages: ChatMessage[], settings: LLMSettings): 
     body = { ...toOpenAIRequest(messages, settings), stream: false };
   }
 
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  const res = await fetch(url, { method: 'POST', mode: 'cors', credentials: 'omit', headers, body: JSON.stringify(body) });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`LLM API ${res.status}: ${text.slice(0, 200)}`);
