@@ -176,9 +176,11 @@ export class LlChatPanel extends LitElement {
     this.testStatus = null;
 
     // 1) 用户消息入库 + 上屏
-    const userMsg: UiMessage = { id: 0, role: 'user', content: q };
+    // 用 appendChatMessage 返回的真实 id，让下面 filter `m.id !== 0` 不会误把当前问题也排除
+    // (老 bug：userMsg.id=0 时被 filter 掉 → messages 空数组 → "chat content is empty")
+    const userMsgId = await appendChatMessage({ role: 'user', content: q });
+    const userMsg: UiMessage = { id: userMsgId, role: 'user', content: q };
     this.messages = [...this.messages, userMsg];
-    await appendChatMessage({ role: 'user', content: q });
 
     // 2) KB 检索 + 联网搜索（按开关）
     let ragSystem: string | undefined;
@@ -247,17 +249,19 @@ export class LlChatPanel extends LitElement {
     }
 
     // 6) 流式完成 → 入库
-    const finalAssistant = { ...assistantMsg, content: fullText, streaming: false };
-    this.messages = this.messages.map((m, i) =>
-      i === this.messages.length - 1 ? finalAssistant : m
-    );
     // 把 kb+web 引用都存到 db（兼容老字段 citations）
     const citationsBlob = JSON.stringify({ kb: kbCitations, web: webCitations });
-    await appendChatMessage({
+    const assistantId = await appendChatMessage({
       role: 'assistant',
       content: fullText,
       citations: citationsBlob,
     });
+    // 用真实 id 回填 assistantMsg，让下次 send() 的 filter `m.id !== 0` 不会误排除它
+    // (老 bug：assistantMsg.id=0 → 下次多轮对话上下文断了,只剩 user 没 assistant)
+    const finalAssistant = { ...assistantMsg, id: assistantId, content: fullText, streaming: false };
+    this.messages = this.messages.map((m, i) =>
+      i === this.messages.length - 1 ? finalAssistant : m
+    );
     this.sending = false;
   }
 
