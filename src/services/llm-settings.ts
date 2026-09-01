@@ -14,8 +14,8 @@ const DEFAULTS: LLMSettings = {
   baseUrl: PROVIDERS.deepseek.defaultBaseUrl,
   apiKey: '',
   model: PROVIDERS.deepseek.defaultModel,
-  temperature: 0.7,
-  maxTokens: 1024,
+  temperature: 0.3,             // 质量优先 (0.7 太随机,容易跑偏)
+  maxTokens: 8192,              // MiniMax-M3 上下文 1M,给输出留足空间避免截断
 };
 
 export function loadLLMSettings(): LLMSettings {

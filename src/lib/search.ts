@@ -219,6 +219,14 @@ export function buildFullRAGPrompt(
   if (kbResults.length > 0) sourcesDesc.push('本地知识库 [KB#1] [KB#2]...');
   if (webResults.length > 0) sourcesDesc.push('联网 [Web#1] [Web#2]...');
 
+  // 全部禁用 (kb+web 都空) 时用最简 system prompt,避免 LLM 模仿"[KB#1]/[Web#1]"幻觉引用
+  if (kbResults.length === 0 && webResults.length === 0) {
+    return {
+      system: '你是 LeoLiao 知识库助手。回答用户问题,简洁准确。',
+      user: query,
+    };
+  }
+
   const system = `你是 LeoLiao 知识库助手。基于下面检索结果回答用户问题。
 规则:
 1. 优先使用检索结果回答（${sourcesDesc.join(' / ')}）
@@ -227,9 +235,7 @@ export function buildFullRAGPrompt(
 4. 简洁,1-3 段,不要长篇大论
 5. 用户用中文就回中文,英文就回英文`;
 
-  const user = parts.length > 0
-    ? `【问题】\n${query}\n\n${parts.join('\n\n')}`
-    : `【问题】\n${query}\n\n（无任何检索结果 — 凭已有知识回答,或说明无法回答）`;
+  const user = `【问题】\n${query}\n\n${parts.join('\n\n')}`;
 
   return { system, user };
 }
