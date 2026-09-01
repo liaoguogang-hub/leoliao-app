@@ -47,23 +47,46 @@ export class LlChatPanel extends LitElement {
 
   async connectedCallback() {
     super.connectedCallback();
-    // V1.1.4: 支持 ?llm-config=base64JSON 一键注入配置（绕开 IME + 用户输入）
-    // 触发方式: adb shell am start -a android.intent.action.VIEW -d "https://localhost/?llm-config=BASE64" -n com.leoliao.app/.MainActivity
-    // 或者启动器把 URL 加 ?llm-config=... 参数
-    const urlParams = new URLSearchParams(window.location.search);
-    const configB64 = urlParams.get('llm-config');
-    if (configB64) {
-      try {
-        const json = atob(decodeURIComponent(configB64));
-        const cfg = JSON.parse(json);
+    // V1.1.4: 三种方式注入配置（按顺序尝试）
+    // 1) ?llm-config=base64JSON URL 参数
+    // 2) localStorage 里 _llm_inject_pending 一次性 pending 字段（adb 通过 run-as 写入）
+    // 3) /data/data/com.leoliao.app/files/llm-config.json 文件
+    let injected = false;
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const configB64 = urlParams.get('llm-config');
+      if (configB64) {
+        const cfg = JSON.parse(atob(decodeURIComponent(configB64)));
         saveLLMSettings(cfg);
         this.settings = cfg;
-        // 清除 URL 参数避免重复触发
-        const cleanUrl = window.location.pathname;
-        window.history.replaceState({}, '', cleanUrl);
-      } catch (e) {
-        console.error('llm-config inject failed', e);
+        injected = true;
+        window.history.replaceState({}, '', window.location.pathname);
       }
+    } catch (e) { console.error('URL llm-config inject failed', e); }
+    if (!injected) {
+      try {
+        const pending = localStorage.getItem('_llm_inject_pending');
+        if (pending) {
+          const cfg = JSON.parse(pending);
+          saveLLMSettings(cfg);
+          this.settings = cfg;
+          localStorage.removeItem('_llm_inject_pending');
+          injected = true;
+        }
+      } catch (e) { console.error('localStorage pending inject failed', e); }
+    }
+    if (!injected) {
+      try {
+        // Capacitor 暴露 Filesystem API；用 readFile 试读
+        // 避免硬依赖 @capacitor/filesystem：直接用 raw fetch（仅 debug build 支持 http://localhost/）
+        const r = await fetch('http://localhost/files/llm-config.json', { cache: 'no-store' });
+        if (r.ok) {
+          const cfg = await r.json();
+          saveLLMSettings(cfg);
+          this.settings = cfg;
+          injected = true;
+        }
+      } catch (e) { /* 文件可能不存在 — 静默 */ }
     }
     this.settings = loadLLMSettings();
     this.web = loadWebSettings();
