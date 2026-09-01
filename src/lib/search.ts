@@ -85,8 +85,13 @@ function extractSnippet(content: string, qTokens: string[]): string {
   return s;
 }
 
-/** 主入口：对所有缓存笔记跑 BM25，返回 top-K */
-export async function search(query: string, k = 5): Promise<SearchResult[]> {
+/** 主入口：对所有缓存笔记跑 BM25，返回 top-K
+ *
+ * @param k       最大返回条数，默认 9999 = 实际"全召回"（按 BM25 分数排，取到安全阀为止）
+ * @param maxChars 总字符数安全阀（snippet + title + path 元数据累加），防止 prompt 爆
+ *                默认 30000 字 ≈ 10K tokens，大多数 LLM context 吃得住
+ */
+export async function search(query: string, k = 9999, maxChars = 30000): Promise<SearchResult[]> {
   const q = query.trim();
   if (!q) return [];
   const qTokens = tokenize(q);
@@ -138,8 +143,21 @@ export async function search(query: string, k = 5): Promise<SearchResult[]> {
     }
   }
 
+  // 按分数降序
   results.sort((a, b) => b.score - a.score);
-  return results.slice(0, k);
+
+  // 4) 字符数安全阀：从 top 开始累加，超出 maxChars 就截断
+  // （保证召回充分 + 不会超 LLM context）
+  let totalChars = 0;
+  const limited: SearchResult[] = [];
+  for (const r of results) {
+    if (limited.length >= k) break;
+    const rChars = r.snippet.length + r.title.length + r.path.length + 30; // 30 字元数据
+    if (limited.length > 0 && totalChars + rChars > maxChars) break;
+    limited.push(r);
+    totalChars += rChars;
+  }
+  return limited;
 }
 
 /** 把检索结果组装成 RAG 用的 system + user prompt */

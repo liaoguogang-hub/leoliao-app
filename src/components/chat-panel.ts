@@ -195,7 +195,8 @@ export class LlChatPanel extends LitElement {
     let kbCitations: SearchResult[] = [];
     let webCitations: WebResult[] = [];
     if (this.useKB) {
-      kbCitations = await kbSearch(q, 5);
+      // 不传 k，用 search.ts 默认 9999（实际全召回，按 BM25 分数排，受 30K 字符安全阀限制）
+      kbCitations = await kbSearch(q);
     }
     if (this.useWeb && this.web.url) {
       try {
