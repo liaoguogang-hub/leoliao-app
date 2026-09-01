@@ -23,6 +23,13 @@ export function loadLLMSettings(): LLMSettings {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      // V1.1.3+ 自动迁移：localStorage 里的 maxTokens < 16384 是早期默认值（1024/8192/16384）
+      // 这些值对 MiniMax-M3 这种 1M context 的模型太小,长回答必被截断。
+      // 强制升级到 DEFAULTS.maxTokens (65536)，但用户主动设的更高值保留。
+      if (typeof parsed.maxTokens === 'number' && parsed.maxTokens < 16384) {
+        console.log('[llm-settings] 升级 maxTokens', parsed.maxTokens, '→', DEFAULTS.maxTokens, '(旧值太小)');
+        parsed.maxTokens = DEFAULTS.maxTokens;
+      }
       return { ...DEFAULTS, ...parsed };
     }
   } catch {}

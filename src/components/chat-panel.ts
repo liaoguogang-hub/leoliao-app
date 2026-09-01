@@ -206,8 +206,8 @@ export class LlChatPanel extends LitElement {
     let ragUser: string | undefined;
     let kbCitations: SearchResult[] = [];
     let webCitations: WebResult[] = [];
-    // DEBUG: 看真实 useKB/useWeb 状态
-    console.log('[chat.send] q=', q, 'useKB=', this.useKB, 'useWeb=', this.useWeb, 'web.url=', this.web?.url);
+    // DEBUG: 看真实 useKB/useWeb/maxTokens 状态
+    console.log('[chat.send] q=', q, 'useKB=', this.useKB, 'useWeb=', this.useWeb, 'web.url=', this.web?.url, 'maxTokens=', this.settings.maxTokens);
     if (this.useKB) {
       // 不传 k，用 search.ts 默认 9999（实际全召回，按 BM25 分数排，受 30K 字符安全阀限制）
       kbCitations = await kbSearch(q);
@@ -349,8 +349,16 @@ export class LlChatPanel extends LitElement {
           控制 AI 回答随机性 · 0-0.3 知识问答/代码 · 0.4-0.7 日常对话 · 0.8-2.0 创意写作
         </div>
 
+        <div class="setting-row">
+          <label title="单次回答的最大 token 数。MiniMax-M3 1M context,推荐 65536">Max Tokens</label>
+          <input type="range" min="1024" max="131072" step="1024" .value=${String(s.maxTokens ?? 65536)}
+            @input=${(e: Event) => { this.settings = { ...s, maxTokens: parseInt((e.target as HTMLInputElement).value) }; this.persistSettings(); }}
+            style="flex:1" />
+          <span class="max-tokens-value" style="min-width:54px;text-align:right;font-family:ui-monospace,monospace">${s.maxTokens ?? 65536}</span>
+        </div>
+
         <div class="setting-hint" style="font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);margin-left:90px;margin-bottom:8px;padding:6px 8px;background:var(--bg);border-radius:4px">
-          [DEBUG] useKB=${this.useKB} useWeb=${this.useWeb} webUrl=${this.web?.url ? '已配置' : '空'}
+          [DEBUG] useKB=${this.useKB} useWeb=${this.useWeb} webUrl=${this.web?.url ? '已配置' : '空'} maxTokens=${s.maxTokens ?? 65536}
         </div>
 
         <div class="setting-actions">
