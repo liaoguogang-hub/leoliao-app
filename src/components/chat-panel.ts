@@ -90,13 +90,28 @@ export class LlChatPanel extends LitElement {
     }
     this.settings = loadLLMSettings();
     this.web = loadWebSettings();
-    // V1.1.2: 防御性同步 — 如果 settings.model 不在当前 provider 的 models 列表里
-    // （典型场景：旧版用户从 v1.1.0 升级上来，model 字段是用户乱填的 'd'/'gpt-3' 等），
-    // 自动 fallback 到 dropdown 第一项，避免一直带着错误值发请求。
+    // V1.1.2+: 防御性同步 — 如果 settings.baseUrl / model 跟当前 provider 的默认值不一致
+    // （典型 bug：用户从 v1.1.0 升级上来，或用 inject 方式灌了 deepseek 配置后切到 MiniMax），
+    // 自动 fallback 到 provider 默认值，避免 baseUrl 还是 deepseek 的域名 + MiniMax key 这种错配。
     const p = PROVIDERS[this.settings.provider];
-    if (p && p.models.length > 0 && !p.models.includes(this.settings.model)) {
-      this.settings = { ...this.settings, model: p.models[0] };
-      saveLLMSettings(this.settings);
+    if (p) {
+      const defaults = p;
+      const baseUrlMatchesPrevDefault = Object.values(PROVIDERS)
+        .filter(other => other.id !== p.id)
+        .some(other => other.defaultBaseUrl && this.settings.baseUrl === other.defaultBaseUrl);
+      const baseUrlLooksBroken =
+        !this.settings.baseUrl ||
+        baseUrlMatchesPrevDefault ||
+        (defaults.defaultBaseUrl && !this.settings.baseUrl.startsWith('http'));
+      const modelNotInList = defaults.models.length > 0 && !defaults.models.includes(this.settings.model);
+      if (baseUrlLooksBroken || modelNotInList) {
+        this.settings = {
+          ...this.settings,
+          baseUrl: defaults.defaultBaseUrl || this.settings.baseUrl,
+          model: defaults.models.length > 0 ? defaults.models[0] : this.settings.model,
+        };
+        saveLLMSettings(this.settings);
+      }
     }
     // 同样：temperature/maxTokens 兜底（OpenAI 协议默认）
     if (typeof this.settings.temperature !== 'number') {
@@ -134,11 +149,16 @@ export class LlChatPanel extends LitElement {
 
   private switchProvider(id: ProviderId) {
     const preset = PROVIDERS[id];
+    const providerChanged = this.settings.provider !== id;
+    // 切换 provider 时：旧 baseUrl/model 跟新 provider 不兼容的概率很大
+    // （典型 bug：用户从 deepseek 切到 MiniMax，baseUrl 仍是 deepseek，
+    //  实际请求发到 deepseek 域名 + MiniMax key → deepseek 返回 401，
+    //  用户误以为 MiniMax 没接通）。切换时强制重置为新 provider 默认值。
     this.settings = {
       ...this.settings,
       provider: id,
-      baseUrl: this.settings.baseUrl || preset.defaultBaseUrl,
-      model: this.settings.model || preset.defaultModel,
+      baseUrl: providerChanged ? preset.defaultBaseUrl : (this.settings.baseUrl || preset.defaultBaseUrl),
+      model: providerChanged ? preset.defaultModel : (this.settings.model || preset.defaultModel),
     };
     this.persistSettings();
     this.testStatus = null;
