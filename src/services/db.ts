@@ -40,6 +40,7 @@ class LeoLiaoDB extends Dexie {
   notes!: Table<CachedNote, string>;
   welcome!: Table<CachedWelcome, string>;
   history!: Table<HistoryEntry, string>;
+  chat!: Table<ChatMessageRow, number>;
 
   constructor() {
     super('leoliao');
@@ -60,12 +61,31 @@ class LeoLiaoDB extends Dexie {
       welcome: 'name, hash',
       history: 'id, type, openedAt',
     });
+    // V40: 对话历史
+    this.version(4).stores({
+      manifest: 'path, mtime, hash',
+      notes: 'path, mtime, cachedAt',
+      welcome: 'name, hash',
+      history: 'id, type, openedAt',
+      chat: '++id, ts, sessionId',
+    });
   }
+}
+
+/** V40: 对话消息 */
+export interface ChatMessageRow {
+  id?: number;            // 自增主键（++id）
+  sessionId: string;      // 当前只有 'default' 一个会话
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  /** 助手消息的检索引用（JSON 序列化的 SearchResult[]） */
+  citations?: string;
+  ts: number;
 }
 
 let _db: LeoLiaoDB | null = null;
 
-function db(): LeoLiaoDB {
+export function db(): LeoLiaoDB {
   if (!_db) _db = new LeoLiaoDB();
   return _db;
 }
@@ -173,4 +193,35 @@ export async function clearHistory(): Promise<void> {
 /** 判断本地文件快照要不要入库(太大不入库,节省空间) */
 export function shouldSnapshotLocal(size: number): boolean {
   return size <= HISTORY_LOCAL_SNAPSHOT_MAX;
+}
+
+/* === V40: 对话历史 === */
+
+const CHAT_SESSION_DEFAULT = 'default';
+const CHAT_MAX_PER_SESSION = 200;          // 每个会话最多保留 200 条（超出滚动删旧）
+
+export async function appendChatMessage(
+  msg: Omit<ChatMessageRow, 'id' | 'sessionId' | 'ts'>
+): Promise<number> {
+  const row: ChatMessageRow = {
+    sessionId: CHAT_SESSION_DEFAULT,
+    ts: Date.now(),
+    ...msg,
+  };
+  const id = await db().chat.add(row) as number;
+  // 裁剪
+  const all = await db().chat.orderBy('ts').toArray();
+  if (all.length > CHAT_MAX_PER_SESSION) {
+    const toDelete = all.slice(0, all.length - CHAT_MAX_PER_SESSION).map((r) => r.id!);
+    await db().chat.bulkDelete(toDelete);
+  }
+  return id;
+}
+
+export async function getChatHistory(sessionId: string = CHAT_SESSION_DEFAULT): Promise<ChatMessageRow[]> {
+  return await db().chat.where('sessionId').equals(sessionId).sortBy('ts');
+}
+
+export async function clearChatHistory(sessionId: string = CHAT_SESSION_DEFAULT): Promise<void> {
+  await db().chat.where('sessionId').equals(sessionId).delete();
 }

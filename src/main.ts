@@ -9,6 +9,7 @@ import './components/help-panel';
 import './components/share-panel';
 import './components/file-viewer';
 import './components/history-panel';
+import './components/chat-panel';
 import type { ManifestEntry, NoteFile, SyncStatus } from './types';
 import { sync as doSync, getNote } from './services/sync';
 import { cacheStats, addHistory } from './services/db';
@@ -536,6 +537,11 @@ export class LlApp extends LitElement {
             @open-local=${(e: CustomEvent<OpenedFile>) => this.handleHistoryOpenLocal(e)}
           ></ll-history-panel>
         ` : null}
+
+        <!-- AI 对话面板 — FAB + 弹窗；引用点击触发打开对应笔记 -->
+        <ll-chat-panel
+          @open-citation=${(e: CustomEvent<string>) => this.handleSelectDirect(e.detail)}
+        ></ll-chat-panel>
 
       </div>
     `;
