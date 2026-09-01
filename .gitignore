@@ -12,6 +12,9 @@ android/app/release/
 android/app/src/main/assets/public/
 android/app/src/main/assets/capacitor.config.json
 android/app/src/main/assets/capacitor.plugins.json
+# Release keystore (不入仓，开发者本地备份到密码管理器)
+android/app/*.keystore
+android/app/*.jks
 
 # 一次性归档 / 不入仓的本地素材
 *.tar.gz
