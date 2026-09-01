@@ -219,11 +219,13 @@ export function buildFullRAGPrompt(
   if (kbResults.length > 0) sourcesDesc.push('本地知识库 [KB#1] [KB#2]...');
   if (webResults.length > 0) sourcesDesc.push('联网 [Web#1] [Web#2]...');
 
-  // 全部禁用 (kb+web 都空) 时用最朴素 prompt，避免 LLM 模仿 [KB#1]/[Web#1] 幻觉引用
-  // （关键：不带"知识库助手"字眼，否则 LLM 会自发用知识库回答模板生成假引用）
+  // 全部禁用 (kb+web 都空) 时用最强反向 prompt，彻底压住 LLM 模拟检索的强先验
   if (kbResults.length === 0 && webResults.length === 0) {
     return {
-      system: '回答用户问题，简洁准确。不要使用 [KB#1] 或 [Web#1] 引用格式。',
+      system: '直接回答用户问题。不要模拟 KB 检索、网页搜索或任何检索过程。' +
+              '不要使用 [KB#1]、[Web#1]、[1]、[2] 等引用标签。' +
+              '不要输出"Let me check..."、"Looking at..."、"检索结果"等中间思考过程。' +
+              '直接给出最终答案。',
       user: query,
     };
   }
