@@ -34,9 +34,18 @@ export const PROVIDERS: Record<ProviderId, ProviderPreset> = {
   minimax: {
     id: 'minimax',
     label: 'MiniMax',
-    defaultBaseUrl: 'https://api.minimaxi.chat/v1',
+    defaultBaseUrl: 'https://api.minimaxi.com/v1',
     defaultModel: 'MiniMax-M3',
-    models: ['MiniMax-M3', 'MiniMax-M2', 'abab6.5s-chat', 'abab6.5s'],
+    models: [
+      'MiniMax-M3',
+      'MiniMax-M2.7-highspeed',
+      'MiniMax-M2.7',
+      'MiniMax-M2.5-highspeed',
+      'MiniMax-M2.5',
+      'MiniMax-M2.1-highspeed',
+      'MiniMax-M2.1',
+      'MiniMax-M2',
+    ],
   },
   anthropic: {
     id: 'anthropic',
