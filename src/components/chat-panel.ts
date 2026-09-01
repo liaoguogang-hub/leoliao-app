@@ -47,6 +47,24 @@ export class LlChatPanel extends LitElement {
 
   async connectedCallback() {
     super.connectedCallback();
+    // V1.1.4: 支持 ?llm-config=base64JSON 一键注入配置（绕开 IME + 用户输入）
+    // 触发方式: adb shell am start -a android.intent.action.VIEW -d "https://localhost/?llm-config=BASE64" -n com.leoliao.app/.MainActivity
+    // 或者启动器把 URL 加 ?llm-config=... 参数
+    const urlParams = new URLSearchParams(window.location.search);
+    const configB64 = urlParams.get('llm-config');
+    if (configB64) {
+      try {
+        const json = atob(decodeURIComponent(configB64));
+        const cfg = JSON.parse(json);
+        saveLLMSettings(cfg);
+        this.settings = cfg;
+        // 清除 URL 参数避免重复触发
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, '', cleanUrl);
+      } catch (e) {
+        console.error('llm-config inject failed', e);
+      }
+    }
     this.settings = loadLLMSettings();
     this.web = loadWebSettings();
     // V1.1.2: 防御性同步 — 如果 settings.model 不在当前 provider 的 models 列表里
