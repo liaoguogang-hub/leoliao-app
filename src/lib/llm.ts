@@ -211,14 +211,25 @@ function toAnthropicRequest(messages: ChatMessage[], settings: LLMSettings): Omi
 }
 
 /** 验证 provider+url+key 是否有效（发一个 1 token 的 ping） */
-export async function testConnection(settings: LLMSettings): Promise<{ ok: boolean; error?: string; model?: string }> {
+export async function testConnection(settings: LLMSettings): Promise<{ ok: boolean; error?: string; model?: string; url?: string }> {
+  const provider = PROVIDERS[settings.provider];
+  const url = provider.isAnthropic
+    ? `${settings.baseUrl.replace(/\/+$/, '')}/v1/messages`
+    : `${settings.baseUrl.replace(/\/+$/, '')}/chat/completions`;
   try {
     await chatOnce(
       [{ role: 'user', content: 'ping' }],
       { ...settings, maxTokens: 8, temperature: 0 }
     );
-    return { ok: true, model: settings.model, error: undefined };
+    return { ok: true, model: settings.model, error: undefined, url };
   } catch (e: any) {
-    return { ok: false, error: e?.message || String(e) };
+    // "Failed to fetch" 是 WebView fetch 网络层失败（DNS/TCP/TLS），无 status code
+    // 常见根因：手机 DNS 污染 / WebView fetch 拦截 / Capacitor 网络配置
+    // 显示 name + message + stack 前 200 字 + 实际请求 URL，方便定位
+    const name = e?.name || 'Error';
+    const msg = e?.message || String(e);
+    const stack = (e?.stack || '').split('\n').slice(0, 3).join(' | ').slice(0, 200);
+    const detail = stack ? ` [${name}] ${msg} | ${stack}` : ` [${name}] ${msg}`;
+    return { ok: false, error: `${detail} → POST ${url}`, url };
   }
 }
