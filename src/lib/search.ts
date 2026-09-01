@@ -219,10 +219,11 @@ export function buildFullRAGPrompt(
   if (kbResults.length > 0) sourcesDesc.push('本地知识库 [KB#1] [KB#2]...');
   if (webResults.length > 0) sourcesDesc.push('联网 [Web#1] [Web#2]...');
 
-  // 全部禁用 (kb+web 都空) 时用最简 system prompt,避免 LLM 模仿"[KB#1]/[Web#1]"幻觉引用
+  // 全部禁用 (kb+web 都空) 时用最朴素 prompt，避免 LLM 模仿 [KB#1]/[Web#1] 幻觉引用
+  // （关键：不带"知识库助手"字眼，否则 LLM 会自发用知识库回答模板生成假引用）
   if (kbResults.length === 0 && webResults.length === 0) {
     return {
-      system: '你是 LeoLiao 知识库助手。回答用户问题,简洁准确。',
+      system: '回答用户问题，简洁准确。不要使用 [KB#1] 或 [Web#1] 引用格式。',
       user: query,
     };
   }

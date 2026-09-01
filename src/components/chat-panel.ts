@@ -36,6 +36,18 @@ interface UiMessage extends ChatMessage {
 export class LlChatPanel extends LitElement {
   protected createRenderRoot() { return this; }
 
+  /** 打开 chat / 新消息时自动滚到底部，让用户直接看到最近一轮对话 */
+  updated(changed: Map<string, unknown>) {
+    super.updated(changed);
+    if (changed.has('open') || changed.has('messages')) {
+      // 等 DOM commit 完再滚（lit render 是异步的）
+      this.updateComplete.then(() => {
+        const cb = this.querySelector('.chat-body') as HTMLElement | null;
+        if (cb) cb.scrollTop = cb.scrollHeight;
+      });
+    }
+  }
+
   @state() private open = false;
   @state() private settings!: LLMSettings;
   @state() private web!: WebSearchSettings;
@@ -316,6 +328,17 @@ export class LlChatPanel extends LitElement {
           <label>API Key</label>
           <input type="password" .value=${s.apiKey} placeholder="sk-..." autocomplete="off"
             @input=${(e: Event) => { this.settings = { ...s, apiKey: (e.target as HTMLInputElement).value }; this.persistSettings(); }} />
+        </div>
+
+        <div class="setting-row">
+          <label title="温度：控制回答随机性。0=最确定,1=平衡,2=最有创造性">Temperature</label>
+          <input type="range" min="0" max="2" step="0.1" .value=${String(s.temperature ?? 0.3)}
+            @input=${(e: Event) => { this.settings = { ...s, temperature: parseFloat((e.target as HTMLInputElement).value) }; this.persistSettings(); }}
+            style="flex:1" />
+          <span class="temp-value" style="min-width:36px;text-align:right;font-family:ui-monospace,monospace">${(s.temperature ?? 0.3).toFixed(1)}</span>
+        </div>
+        <div class="setting-hint" style="font-size:11px;color:var(--dim);margin-left:90px;margin-top:-6px;margin-bottom:4px">
+          控制 AI 回答随机性 · 0-0.3 知识问答/代码 · 0.4-0.7 日常对话 · 0.8-2.0 创意写作
         </div>
 
         <div class="setting-actions">
