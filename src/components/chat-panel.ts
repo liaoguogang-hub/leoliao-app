@@ -212,17 +212,14 @@ export class LlChatPanel extends LitElement {
       // 不传 k，用 search.ts 默认 9999（实际全召回，按 BM25 分数排，受 30K 字符安全阀限制）
       kbCitations = await kbSearch(q);
     }
-    // 临时禁用 webSearch：用户截图显示 useWeb=false 仍有 "Web#: 知乎" 引用，
-    // 排查是 LLM 模仿历史格式还是 webSearch 真的跑了 — 禁用后还有就 100% LLM 模仿
-    const webSearchEnabled = false;
-    if (webSearchEnabled && this.useWeb && this.web.url) {
+    if (this.useWeb && this.web.url) {
       try {
         webCitations = await webSearch(q, this.web);
       } catch (e) {
         console.warn('web search failed', e);
       }
-    } else {
-      console.log('[chat.send] webSearch 临时禁用 (hardcoded=false) — 跳过');
+    } else if (this.useWeb && !this.web.url) {
+      console.log('[chat.send] useWeb=true 但 web.url 未配置 — 跳过 web search');
     }
     console.log('[chat.send] kbCitations=', kbCitations.length, 'webCitations=', webCitations.length);
     if (kbCitations.length > 0 || webCitations.length > 0) {
