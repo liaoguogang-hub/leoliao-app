@@ -344,6 +344,10 @@ export class LlChatPanel extends LitElement {
           控制 AI 回答随机性 · 0-0.3 知识问答/代码 · 0.4-0.7 日常对话 · 0.8-2.0 创意写作
         </div>
 
+        <div class="setting-hint" style="font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);margin-left:90px;margin-bottom:8px;padding:6px 8px;background:var(--bg);border-radius:4px">
+          [DEBUG] useKB=${this.useKB} useWeb=${this.useWeb} webUrl=${this.web?.url ? '已配置' : '空'}
+        </div>
+
         <div class="setting-actions">
           <button class="btn-test" @click=${() => this.onTestConnection()}>测试连接</button>
           ${this.testStatus ? html`
