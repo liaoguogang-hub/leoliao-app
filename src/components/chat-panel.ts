@@ -49,6 +49,21 @@ export class LlChatPanel extends LitElement {
     super.connectedCallback();
     this.settings = loadLLMSettings();
     this.web = loadWebSettings();
+    // V1.1.2: 防御性同步 — 如果 settings.model 不在当前 provider 的 models 列表里
+    // （典型场景：旧版用户从 v1.1.0 升级上来，model 字段是用户乱填的 'd'/'gpt-3' 等），
+    // 自动 fallback 到 dropdown 第一项，避免一直带着错误值发请求。
+    const p = PROVIDERS[this.settings.provider];
+    if (p && p.models.length > 0 && !p.models.includes(this.settings.model)) {
+      this.settings = { ...this.settings, model: p.models[0] };
+      saveLLMSettings(this.settings);
+    }
+    // 同样：temperature/maxTokens 兜底（OpenAI 协议默认）
+    if (typeof this.settings.temperature !== 'number') {
+      this.settings = { ...this.settings, temperature: 0.7 };
+    }
+    if (typeof this.settings.maxTokens !== 'number') {
+      this.settings = { ...this.settings, maxTokens: 1024 };
+    }
     await this.loadHistory();
   }
 
