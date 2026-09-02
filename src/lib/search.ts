@@ -89,24 +89,30 @@ function extractSnippet(content: string, qTokens: string[]): string {
 }
 
 /**
- * 主入口 — V48: 混合检索(BM25 + 向量 + RRF 融合)
+ * 主入口 — V49: 混合检索(BM25 + 向量 + RRF 融合 + 本地文件支持)
  *
  * @param query  查询字符串
  * @param k      最大返回条数(默认 9999 = 全召回)
  * @param maxChars 字符数安全阀(默认 30000 字 ≈ 10K tokens)
- * @param paths  可选 — 限定检索范围(文件夹前缀列表,空=全部)
+ * @param paths  可选 — 限定检索范围(文件夹前缀列表,空=全部 vault)
  * @param mode   检索模式:'bm25' | 'vector' | 'hybrid'(默认 hybrid)
+ * @param includeLocal 是否包含本地文件(PDF 等,默认 false = 仅 vault)
  */
 export async function search(
   query: string,
   k = 9999,
   maxChars = 30000,
   paths: string[] = [],
-  mode: SearchMode = 'hybrid'
+  mode: SearchMode = 'hybrid',
+  includeLocal = false
 ): Promise<SearchResult[]> {
-  if (mode === 'bm25') return searchBM25(query, k, maxChars, paths);
-  if (mode === 'vector') return searchVector(query, k, maxChars, paths);
-  return searchHybrid(query, k, maxChars, paths);
+  // 过滤掉 📕 本地文件路径(除非 includeLocal=true)
+  const effectivePaths = includeLocal
+    ? paths
+    : paths.filter(p => !p.startsWith('📕'));
+  if (mode === 'bm25') return searchBM25(query, k, maxChars, effectivePaths);
+  if (mode === 'vector') return searchVector(query, k, maxChars, effectivePaths);
+  return searchHybrid(query, k, maxChars, effectivePaths);
 }
 
 /** V48: BM25 单跑 */

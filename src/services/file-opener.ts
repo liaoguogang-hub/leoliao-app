@@ -321,11 +321,18 @@ async function renderPdf(
       : `<div class="file-warn" style="background:rgba(80,160,80,0.1);color:#2d9d5f">✅ 完整渲染 ${totalPages} 页</div>`;
 
     const html = `${tip}<div class="pdf-pages">${imgs.join('')}</div>`;
-    return makeFile(
+    const file = makeFile(
       name, ext, mimeType, bytes, undefined,
       html, 'local',
       truncated ? `PDF ${totalPages} 页,仅渲染前 ${PDF_MAX_PAGES} 页` : `PDF ${totalPages} 页`
     );
+
+    // V49: 异步后台提取文字 + 切分 + 写 Dexie(让本地 PDF 可检索)
+    indexLocalPdf(pdf, name, totalPages).catch(err => {
+      console.warn('[file-opener] PDF 文字提取失败:', err);
+    });
+
+    return file;
   } catch (e: any) {
     console.error('[file-opener] PDF 渲染失败:', e);
     return makeFile(
@@ -339,5 +346,65 @@ async function renderPdf(
       'local',
       `PDF 渲染失败: ${e?.message || e}`
     );
+  }
+}
+
+/** V49: 提取 PDF 所有页文字 → 切 chunk → 写 Dexie(让本地 PDF 可被 RAG 检索)
+ *  - path = "📕 xxx.pdf#p{N}"(用 emoji 前缀区分 vault 笔记)
+ *  - 后续 search() 默认不查本地文件,需在 chat settings 加 "📂 本地文件" KB 范围才查
+ */
+async function indexLocalPdf(pdf: any, name: string, totalPages: number): Promise<void> {
+  try {
+    const { saveChunks, saveChunkVectors } = await import('./db');
+    const { chunkDocument, chunkHash } = await import('./chunker');
+    const { embedText } = await import('./embedder');
+    const pdfId = `📕 ${name}.pdf`;
+    // 删旧(防止重复打开堆积)
+    await saveChunks(pdfId, []);
+    // 1) 提取所有页文字
+    const allTextParts: string[] = [];
+    for (let i = 1; i <= totalPages; i++) {
+      const page = await pdf.getPage(i);
+      const textContent = await page.getPageTextContent();
+      const items = textContent.items || [];
+      const pageText = items
+        .map((it: any) => it.str || '')
+        .filter((s: string) => s.trim())
+        .join(' ');
+      if (pageText.trim()) allTextParts.push(`\n\n## 第 ${i} 页\n\n${pageText}`);
+    }
+    const fullDoc = allTextParts.join('').trim();
+    if (!fullDoc) {
+      console.log('[file-opener] PDF 无可提取文字(可能是扫描版)');
+      return;
+    }
+    console.log('[file-opener] PDF 文字提取完成,', fullDoc.length, '字');
+    // 2) chunker 切分
+    const chunks = chunkDocument(pdfId, fullDoc);
+    // 3) 写 chunks
+    const chunkRows = chunks.map(c => ({
+      idx: c.idx,
+      heading: c.heading || `第 1-${totalPages} 页`,
+      content: c.content,
+      startOffset: c.startOffset,
+      endOffset: c.endOffset,
+      hash: chunkHash(c.content),
+      mtime: Date.now(),
+    }));
+    await saveChunks(pdfId, chunkRows);
+    // 4) 走 embedder 建向量索引
+    const vecRows = chunks.map(c => {
+      const vec = embedText(c.content);
+      return {
+        idx: c.idx,
+        vec, dim: vec.length,
+        hash: chunkHash(c.content),
+        mtime: Date.now(),
+      };
+    });
+    await saveChunkVectors(pdfId, vecRows);
+    console.log('[file-opener] PDF 索引完成:', chunks.length, 'chunks');
+  } catch (e) {
+    console.warn('[file-opener] indexLocalPdf 失败:', e);
   }
 }

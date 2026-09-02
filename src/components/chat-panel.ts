@@ -100,6 +100,8 @@ export class LlChatPanel extends LitElement {
   @state() private allDirs: string[] = [];
   /** V48: 检索模式(bm25 / vector / hybrid) */
   @state() private searchMode: SearchMode = 'hybrid';
+  /** V49: 是否把本地 PDF 等加入 KB 范围 */
+  @state() private includeLocal = false;
   /** V45: Agent 启用的工具列表(默认全部启用) */
   @state() private enabledTools: string[] = ['kb_search', 'web_search', 'note_open', 'list_files', 'note_edit'];
   /** V46: 长期记忆设置 */
@@ -384,8 +386,8 @@ export class LlChatPanel extends LitElement {
     // DEBUG: 看真实 useKB/useWeb/maxTokens 状态
     console.log('[chat.send] q=', q, 'useKB=', this.useKB, 'useWeb=', this.useWeb, 'web.url=', this.web?.url, 'maxTokens=', this.settings.maxTokens);
     if (this.useKB) {
-      // V48: 传 searchMode(bm25 / vector / hybrid)+ searchPaths
-      kbCitations = await kbSearch(q, 9999, 30000, this.searchPaths, this.searchMode);
+      // V49: 传 searchMode + searchPaths + includeLocal(本地 PDF)
+      kbCitations = await kbSearch(q, 9999, 30000, this.searchPaths, this.searchMode, this.includeLocal);
     }
     if (this.useWeb && this.web.url) {
       try {
@@ -847,6 +849,14 @@ export class LlChatPanel extends LitElement {
               <option value="bm25" ?selected=${this.searchMode === 'bm25'}>📝 纯 BM25</option>
               <option value="vector" ?selected=${this.searchMode === 'vector'}>🎯 纯向量</option>
             </select>
+          </div>
+          <!-- V49: 本地文件 KB 范围 -->
+          <div class="setting-row">
+            <label class="checkbox-label">
+              <input type="checkbox" ?checked=${this.includeLocal}
+                @change=${(e: Event) => { this.includeLocal = (e.target as HTMLInputElement).checked; }} />
+              📂 包含本地文件(已打开的 PDF 等)
+            </label>
           </div>
         ` : nothing}
         </div>
