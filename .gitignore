@@ -31,3 +31,5 @@ icons-preview/
 .devtools/open-and-click.mjs
 .devtools/wiki-check.mjs
 .devtools/wiki-check2.mjs
+# diag 临时探针不入仓
+.devtools/diag-*.mjs
