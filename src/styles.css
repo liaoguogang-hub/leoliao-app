@@ -2065,6 +2065,73 @@ ll-app {
   50% { opacity: 0.7; }
 }
 
+/* === V44: KB 检索范围选择 === */
+.btn-path-pick {
+  flex: 1;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  text-align: left;
+}
+.btn-path-pick:hover {
+  border-color: var(--accent);
+}
+.link-clear {
+  background: transparent;
+  border: none;
+  color: var(--dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  margin-left: 6px;
+  padding: 0 4px;
+}
+.link-clear:hover {
+  color: #d05050;
+}
+.path-picker-actions {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+.path-picker-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-2);
+}
+.path-picker-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 13px;
+}
+.path-picker-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+.path-picker-item:last-child {
+  border-bottom: none;
+}
+.path-picker-item:hover {
+  background: var(--border);
+}
+.path-picker-item input[type="checkbox"] {
+  margin: 0;
+}
+
 /* === V43: 节点操作 / 新建 / 重命名 / 移动 modal === */
 .modal-overlay {
   position: fixed;

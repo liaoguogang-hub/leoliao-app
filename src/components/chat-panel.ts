@@ -54,6 +54,26 @@ export class LlChatPanel extends LitElement {
         if (cb) cb.scrollTop = cb.scrollHeight;
       });
     }
+    // V44: modal 打开时重新加载 dirs(可能 sync 完成后 chunks 变多了)
+    if (changed.has('open') && this.open && this.allDirs.length === 0) {
+      this.refreshDirs();
+    }
+  }
+
+  /** V44: 重新加载所有目录(从 chunks 表) */
+  async refreshDirs() {
+    try {
+      const { loadAllChunks } = await import('../services/db');
+      const allChunks = await loadAllChunks();
+      const dirSet = new Set<string>();
+      for (const c of allChunks) {
+        const parts = c.path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          dirSet.add(parts.slice(0, i).join('/'));
+        }
+      }
+      this.allDirs = Array.from(dirSet).sort();
+    } catch (e) { console.warn('[chat] refreshDirs failed', e); }
   }
 
   @state() private open = false;
@@ -65,6 +85,10 @@ export class LlChatPanel extends LitElement {
   @state() private sending = false;
   @state() private useKB = true;             // 是否启用 KB 检索（RAG 模式）
   @state() private useWeb = false;           // 是否启用联网搜索
+  /** V44: KB 检索范围(文件夹前缀列表,空=全部) */
+  @state() private searchPaths: string[] = [];
+  @state() private showPathPicker = false;
+  @state() private allDirs: string[] = [];
   @state() private testStatus: { ok: boolean; msg: string } | null = null;
   @state() private vaultNoteCount = 0;     // vault 已同步笔记数 (Dexie notes.count)
   // V42 多会话
@@ -157,6 +181,19 @@ export class LlChatPanel extends LitElement {
     try {
       this.vaultNoteCount = await db().notes.count();
     } catch {}
+    // V44: 加载所有目录路径(从 chunks 表的 path 提取 unique 前缀)
+    try {
+      const { loadAllChunks } = await import('../services/db');
+      const allChunks = await loadAllChunks();
+      const dirSet = new Set<string>();
+      for (const c of allChunks) {
+        const parts = c.path.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          dirSet.add(parts.slice(0, i).join('/'));
+        }
+      }
+      this.allDirs = Array.from(dirSet).sort();
+    } catch (e) { console.warn('[chat] load dirs failed', e); }
   }
 
   /** V42: 加载所有会话 + 默认选第一个 */
@@ -327,8 +364,8 @@ export class LlChatPanel extends LitElement {
     // DEBUG: 看真实 useKB/useWeb/maxTokens 状态
     console.log('[chat.send] q=', q, 'useKB=', this.useKB, 'useWeb=', this.useWeb, 'web.url=', this.web?.url, 'maxTokens=', this.settings.maxTokens);
     if (this.useKB) {
-      // 不传 k，用 search.ts 默认 9999（实际全召回，按 BM25 分数排，受 30K 字符安全阀限制）
-      kbCitations = await kbSearch(q);
+      // V44: 传 searchPaths 限定范围(空=全部)
+      kbCitations = await kbSearch(q, 9999, 30000, this.searchPaths);
     }
     if (this.useWeb && this.web.url) {
       try {
@@ -523,6 +560,23 @@ export class LlChatPanel extends LitElement {
               @change=${(e: Event) => { this.useWeb = (e.target as HTMLInputElement).checked; console.log('[chat] useWeb →', this.useWeb); }} />
             启用联网搜索
           </label>
+        </div>
+        ${this.useKB ? html`
+          <div class="setting-row">
+            <label>KB 检索范围</label>
+            <button class="btn-path-pick" @click=${() => this.showPathPicker = true}>
+              ${this.searchPaths.length === 0
+                ? `📁 全部 (${this.allDirs.length} 个目录)`
+                : `📁 ${this.searchPaths.length} 个目录`}
+            </button>
+          </div>
+          ${this.searchPaths.length > 0 ? html`
+            <div class="setting-hint" style="font-family:ui-monospace,monospace;font-size:11px;color:var(--accent);margin-left:90px;margin-bottom:4px">
+              当前:${this.searchPaths.slice(0, 3).join(', ')}${this.searchPaths.length > 3 ? ` +${this.searchPaths.length - 3} 个` : ''}
+              <button class="link-clear" @click=${() => this.searchPaths = []}>× 清除</button>
+            </div>
+          ` : nothing}
+        ` : nothing}
         </div>
 
         ${this.useWeb ? html`
@@ -787,6 +841,46 @@ export class LlChatPanel extends LitElement {
       ` : html`
         <button class="chat-fab" title="AI 对话" @click=${() => { this.open = true; }}>💬</button>
       `}
+      ${this.showPathPicker ? this.renderPathPicker() : nothing}
+    `;
+  }
+
+  /** V44: KB 检索范围选择器 */
+  private renderPathPicker() {
+    return html`
+      <div class="modal-overlay" @click=${(e: MouseEvent) => {
+        if (e.target === e.currentTarget) this.showPathPicker = false;
+      }}>
+        <div class="modal-box">
+          <h2>📁 KB 检索范围</h2>
+          <p class="modal-sub">限定检索的目录(不选 = 全部)</p>
+          <div class="path-picker-actions">
+            <button class="modal-btn" @click=${() => this.searchPaths = []}>全部清除</button>
+            <button class="modal-btn" @click=${() => this.searchPaths = [...this.allDirs]}>全选</button>
+          </div>
+          <div class="path-picker-list">
+            ${this.allDirs.length === 0 ? html`
+              <div class="path-picker-empty">还没有目录(同步 vault 后会出现)</div>
+            ` : this.allDirs.map(d => html`
+              <label class="path-picker-item">
+                <input type="checkbox"
+                  ?checked=${this.searchPaths.includes(d)}
+                  @change=${(e: Event) => {
+                    const on = (e.target as HTMLInputElement).checked;
+                    this.searchPaths = on
+                      ? [...this.searchPaths, d]
+                      : this.searchPaths.filter(p => p !== d);
+                  }} />
+                <span>${d}/</span>
+              </label>
+            `)}
+          </div>
+          <div class="modal-actions">
+            <button class="modal-btn" @click=${() => this.showPathPicker = false}>取消</button>
+            <button class="modal-btn primary" @click=${() => this.showPathPicker = false}>完成</button>
+          </div>
+        </div>
+      </div>
     `;
   }
 }

@@ -16,6 +16,7 @@ import type { ManifestEntry, NoteFile, SyncStatus, SyncSource } from '../types';
 import { MOCK_MANIFEST, MOCK_FILES } from '../data/mock-data';
 import * as DB from './db';
 import { parseNote } from './renderer';
+import { chunkDocument, chunkHash } from './chunker';
 
 interface SyncSourceConfig {
   type: SyncSource;
@@ -175,6 +176,9 @@ async function syncFromOSS(): Promise<ManifestEntry[]> {
     console.log(`[sync] 第 ${pass + 1} 遍后仍缺 ${toFetch.length} 个`);
   }
 
+  // V44: 同步 chunk 切分(所有已缓存的 notes → chunks)
+  await reindexChunks(manifest);
+
   // synced 按「真实缓存状态」统计:显示 1258/1258 即代表确实全部缓存
   const synced = manifest.length - toFetch.length;
 
@@ -231,4 +235,25 @@ export async function getNote(path: string): Promise<NoteFile | null> {
 
 export function getSourceConfig(): SyncSourceConfig {
   return { ...SOURCE };
+}
+
+/** V44: 全量重建 chunks 索引(对所有已缓存的 notes) */
+async function reindexChunks(_manifest: ManifestEntry[]) {
+  const allNotes = await DB.loadAllNotes();
+  let totalChunks = 0;
+  for (const note of allNotes) {
+    const chunks = chunkDocument(note.path, note.content);
+    const rows = chunks.map(c => ({
+      idx: c.idx,
+      heading: c.heading,
+      content: c.content,
+      startOffset: c.startOffset,
+      endOffset: c.endOffset,
+      hash: chunkHash(c.content),
+      mtime: note.mtime,
+    }));
+    await DB.saveChunks(note.path, rows);
+    totalChunks += rows.length;
+  }
+  console.log(`[sync] chunked: ${allNotes.length} notes → ${totalChunks} chunks`);
 }

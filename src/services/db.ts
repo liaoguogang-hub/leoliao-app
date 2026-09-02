@@ -43,6 +43,8 @@ class LeoLiaoDB extends Dexie {
   chat!: Table<ChatMessageRow, number>;
   /** V42: 多会话 */
   chatSessions!: Table<ChatSessionRow, string>;
+  /** V44: 文档 chunks(主键 [path+idx]) */
+  chunks!: Table<ChunkRow, [string, number]>;
 
   constructor() {
     super('leoliao');
@@ -80,6 +82,16 @@ class LeoLiaoDB extends Dexie {
       chat: '++id, ts, sessionId',
       chatSessions: 'id, updatedAt',
     });
+    // V44: chunks 表(主键复合 [path, idx],path 索引用于按路径删)
+    this.version(6).stores({
+      manifest: 'path, mtime, hash',
+      notes: 'path, mtime, cachedAt',
+      welcome: 'name, hash',
+      history: 'id, type, openedAt',
+      chat: '++id, ts, sessionId',
+      chatSessions: 'id, updatedAt',
+      chunks: '[path+idx], path',
+    });
   }
 }
 
@@ -102,6 +114,18 @@ export interface ChatSessionRow {
   updatedAt: number;      // 最后活动时间(发问/续聊都更新)
   /** V42: 消息数冗余(0 = 空会话,1+ = 有内容) */
   messageCount: number;
+}
+
+/** V44: chunk(主键 [path, idx]) */
+export interface ChunkRow {
+  path: string;             // 所属笔记路径
+  idx: number;              // chunk 在该笔记内的索引
+  heading: string;          // 所属二级标题(无则用笔记文件名)
+  content: string;          // chunk 原文
+  startOffset: number;      // 在原文档里的字符位置
+  endOffset: number;
+  hash: string;             // chunkHash(content)
+  mtime: number;            // 笔记 mtime(级联用)
 }
 
 let _db: LeoLiaoDB | null = null;
@@ -151,6 +175,33 @@ export async function deleteNote(path: string): Promise<void> {
 
 export async function clearAllNotes(): Promise<void> {
   await db().notes.clear();
+}
+
+/* === V44: chunks CRUD === */
+
+/** 批量写入某笔记的所有 chunks(覆盖式) */
+export async function saveChunks(path: string, chunks: Array<Omit<ChunkRow, 'path'>>): Promise<void> {
+  // 1) 删旧
+  await db().chunks.where('path').equals(path).delete();
+  // 2) 加新
+  const rows: ChunkRow[] = chunks.map(c => ({ ...c, path }));
+  if (rows.length > 0) await db().chunks.bulkPut(rows);
+}
+
+/** 取某笔记的所有 chunks(按 idx 排序) */
+export async function loadChunksForNote(path: string): Promise<ChunkRow[]> {
+  const rows = await db().chunks.where('path').equals(path).toArray();
+  return rows.sort((a, b) => a.idx - b.idx);
+}
+
+/** 取所有 chunks(全量检索用) */
+export async function loadAllChunks(): Promise<ChunkRow[]> {
+  return await db().chunks.toArray();
+}
+
+/** 删某 path 下的所有 chunks(notes 改名/删除时级联) */
+export async function deleteChunksForNote(path: string): Promise<void> {
+  await db().chunks.where('path').equals(path).delete();
 }
 
 /** V43: 重命名/移动笔记(改 path + 同时更新 manifest)
