@@ -10,6 +10,7 @@ import './components/share-panel';
 import './components/file-viewer';
 import './components/history-panel';
 import './components/chat-panel';
+import './components/wiki-panel';
 import type { ManifestEntry, NoteFile, SyncStatus } from './types';
 import { sync as doSync, getNote } from './services/sync';
 import { cacheStats, addHistory } from './services/db';
@@ -46,6 +47,8 @@ export class LlApp extends LitElement {
   @state() private showRenameNote = false;
   @state() private showMoveNote = false;
   @state() private actionTarget: { path: string; isDir: boolean; name: string } | null = null;
+  // V47: Wiki 主页
+  @state() private showWiki = false;
   // V29: 主题设置
   @state() private theme: ThemeSettings = loadSettings();
   // V38: 开机欢迎图
@@ -661,6 +664,8 @@ export class LlApp extends LitElement {
               </button>
               <!-- V43: 新建笔记 -->
               <button class="toolbar-btn" title="新建笔记" @click=${() => { this.actionTarget = { path: '', isDir: false, name: '' }; this.showNewNote = true; this.showSettings = false; this.showShare = false; this.showHelp = false; }}>➕</button>
+              <!-- V47: Wiki 主页 -->
+              <button class="toolbar-btn" title="Wiki 主页" @click=${() => { this.showWiki = true; this.showSettings = false; this.showShare = false; this.showHelp = false; }}>📖</button>
               <!-- V39: 历史记录 -->
               <button class="toolbar-btn" title="历史打开过的笔记/文件" @click=${() => this.showHistory = true}>🕘</button>
               <button class="toolbar-btn" title="保存到本地" @click=${() => this.saveNote()}>💾</button>
@@ -759,6 +764,13 @@ export class LlApp extends LitElement {
             @open-note=${(e: CustomEvent<string>) => this.handleHistoryOpenNote(e)}
             @open-local=${(e: CustomEvent<OpenedFile>) => this.handleHistoryOpenLocal(e)}
           ></ll-history-panel>
+        ` : null}
+
+        ${this.showWiki ? html`
+          <ll-wiki-panel
+            @close=${() => this.showWiki = false}
+            @open-note=${(e: CustomEvent<string>) => { this.showWiki = false; this.handleHistoryOpenNote(e); }}
+          ></ll-wiki-panel>
         ` : null}
 
         ${this.renderActionModal()}

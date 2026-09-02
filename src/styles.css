@@ -2065,6 +2065,182 @@ ll-app {
   50% { opacity: 0.7; }
 }
 
+/* === V47: Wiki 主页 + 反向链接 === */
+.wiki-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin: 12px 0;
+}
+.stat-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  text-align: center;
+}
+.stat-num {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.stat-label {
+  font-size: 11px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+.wiki-body {
+  max-height: 55vh;
+  overflow-y: auto;
+  margin-top: 8px;
+}
+.wiki-section {
+  margin: 12px 0;
+}
+.wiki-section h3 {
+  font-size: 13px;
+  color: var(--accent);
+  margin: 0 0 6px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.wiki-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wiki-tag {
+  padding: 4px 8px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.wiki-tag > summary {
+  cursor: pointer;
+  user-select: none;
+}
+.wiki-tag-paths {
+  margin-top: 6px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.path-link {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+  text-decoration: none;
+}
+.path-link:hover {
+  background: var(--bg);
+}
+.wiki-recent {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+}
+.wiki-recent-item {
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.wiki-recent-item:hover {
+  border-color: var(--accent);
+}
+.wiki-recent-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+.wiki-recent-meta {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+.wiki-recent-path {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 2px;
+}
+.wiki-search-row {
+  display: flex;
+  gap: 6px;
+}
+.wiki-search-row .modal-input {
+  flex: 1;
+}
+.wiki-backlinks {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wiki-backlink {
+  padding: 6px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.wiki-backlink:hover {
+  border-color: var(--accent);
+}
+.wiki-backlink-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+.wiki-backlink-context {
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 2px;
+  font-style: italic;
+}
+.wiki-backlink-path {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  margin-top: 2px;
+}
+.wiki-orphans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.muted {
+  color: var(--dim);
+  font-size: 11px;
+}
+.backlinks-footer {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.backlinks-title {
+  color: var(--accent);
+}
+.backlink-ref {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+  font-size: 11px;
+}
+.backlink-ref:hover {
+  opacity: 0.85;
+  color: var(--bg);
+}
+
 /* === V46: 长期记忆面板 === */
 .memory-topic {
   border: 1px solid var(--border);

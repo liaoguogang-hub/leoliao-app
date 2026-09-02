@@ -4,11 +4,12 @@
  * V43: 加 edit 模式(view/edit 切换 + textarea + markdown 预览 + 保存回 Dexie)
  */
 
-import { LitElement, html } from 'lit';
+import { LitElement, html, nothing } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 import MarkdownIt from 'markdown-it';
 import type { NoteFile } from '../types';
+import { backlinks, type BackLink } from '../services/wiki';
 
 const localMd = new MarkdownIt({
   html: false,
@@ -21,6 +22,22 @@ const localMd = new MarkdownIt({
 export class LlNoteView extends LitElement {
   protected createRenderRoot() { return this; }
 
+  /** V47: note 变化时重新加载反向链接 */
+  updated(changed: Map<string, unknown>) {
+    if (changed.has('note') && this.note && !this.editing) {
+      this.loadBackLinks(this.note.path);
+    }
+  }
+
+  private async loadBackLinks(path: string) {
+    try {
+      this.backLinks = await backlinks(path);
+    } catch (e) {
+      console.warn('[note-view] loadBackLinks failed', e);
+      this.backLinks = [];
+    }
+  }
+
   @property({ type: Object }) note: NoteFile | null = null;
   /** V43: edit 模式显示 textarea,否则渲染 markdown */
   @state() private editing = false;
@@ -28,6 +45,8 @@ export class LlNoteView extends LitElement {
   @state() private draft = '';
   /** V43: 保存状态 undefined=未改, false=保存中 */
   @state() private saveStatus: boolean | undefined = undefined;
+  /** V47: 反向链接(此笔记被哪些笔记引用) */
+  @state() private backLinks: BackLink[] = [];
 
   private onLinkClick(e: MouseEvent, href: string) {
     if (href.startsWith('#wiki:')) {
@@ -97,6 +116,7 @@ export class LlNoteView extends LitElement {
     }
   }
 
+  /** V43: 进入编辑模式 */
   private renderFrontmatter(fm: Record<string, unknown>) {
     const keys = Object.keys(fm).filter(k => k !== 'tags');
     if (keys.length === 0) return null;
@@ -228,6 +248,20 @@ export class LlNoteView extends LitElement {
                   ${l}
                 </span>
               `)}
+            </div>
+          </footer>
+        ` : null}
+        ${this.backLinks.length > 0 && !this.editing ? html`
+          <footer class="note-footer backlinks-footer">
+            <div class="links-title backlinks-title">🔗 被 ${this.backLinks.length} 篇引用：</div>
+            <div class="links">
+              ${this.backLinks.slice(0, 15).map(b => html`
+                <span class="link-ref backlink-ref" title="${b.context}"
+                  @click=${() => this.dispatchEvent(new CustomEvent('wikilink', { detail: b.path, bubbles: true, composed: true }))}>
+                  ${b.title}
+                </span>
+              `)}
+              ${this.backLinks.length > 15 ? html`<span class="muted"> +${this.backLinks.length - 15}</span>` : nothing}
             </div>
           </footer>
         ` : null}
