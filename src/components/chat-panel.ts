@@ -14,9 +14,13 @@
 import { LitElement, html, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { PROVIDERS, PROVIDER_LIST, type ProviderId } from '../lib/llm-providers';
-import { chatStream, testConnection, type ChatMessage, type LLMSettings } from '../lib/llm';
+import { chatStream, testConnection, chatOnce, type ChatMessage, type LLMSettings } from '../lib/llm';
 import { search as kbSearch, buildFullRAGPrompt, type SearchResult } from '../lib/search';
 import { webSearch, WEB_PROVIDER_LIST, type WebSearchSettings } from '../lib/web-search';
+import {
+  agentSystemPrompt, parseToolCall, executeToolCall, wrapToolResult,
+  type AgentStep, type AgentContext,
+} from '../lib/agent';
 import { loadLLMSettings, saveLLMSettings } from '../services/llm-settings';
 import { loadWebSettings, saveWebSettings } from '../services/web-settings';
 import {
@@ -38,6 +42,8 @@ interface UiMessage extends ChatMessage {
   ragStatus?: { kb: number; web: number; useKB: boolean; useWeb: boolean };
   /** V42-p2: 复制按钮短暂反馈(1.8s 后自动清掉) */
   _copied?: boolean | undefined;
+  /** V45: Agent 工具调用步骤(可折叠显示) */
+  agentSteps?: AgentStep[];
 }
 
 @customElement('ll-chat-panel')
@@ -85,10 +91,13 @@ export class LlChatPanel extends LitElement {
   @state() private sending = false;
   @state() private useKB = true;             // 是否启用 KB 检索（RAG 模式）
   @state() private useWeb = false;           // 是否启用联网搜索
+  @state() private useAgent = true;          // V45: Agent 模式(启用后 LLM 可调工具)
   /** V44: KB 检索范围(文件夹前缀列表,空=全部) */
   @state() private searchPaths: string[] = [];
   @state() private showPathPicker = false;
   @state() private allDirs: string[] = [];
+  /** V45: Agent 启用的工具列表(默认全部启用) */
+  @state() private enabledTools: string[] = ['kb_search', 'web_search', 'note_open', 'list_files', 'note_edit'];
   @state() private testStatus: { ok: boolean; msg: string } | null = null;
   @state() private vaultNoteCount = 0;     // vault 已同步笔记数 (Dexie notes.count)
   // V42 多会话
@@ -398,7 +407,17 @@ export class LlChatPanel extends LitElement {
 
     // 4) 组装完整消息列表（含 system）
     const messages: ChatMessage[] = [];
-    if (ragSystem) messages.push({ role: 'system', content: ragSystem });
+    // V45: Agent 模式 → 用 agent system prompt 替换普通 ragSystem
+    if (this.useAgent && this.enabledTools.length > 0) {
+      messages.push({ role: 'system', content: agentSystemPrompt() });
+      // 如果 RAG 检索可拿到,作为初始 kb_search 结果给 LLM 提示
+      if (kbCitations.length > 0 || webCitations.length > 0) {
+        const rag = buildFullRAGPrompt(q, kbCitations, webCitations);
+        messages.push({ role: 'system', content: rag.system });
+      }
+    } else if (ragSystem) {
+      messages.push({ role: 'system', content: ragSystem });
+    }
     // 取最近 8 轮历史（user/assistant）作为多轮上下文
     const recent = this.messages
       .filter(m => m.id !== 0 && m.role !== 'system')   // 排除本次未持久化的占位
@@ -409,6 +428,14 @@ export class LlChatPanel extends LitElement {
       recent[recent.length - 1] = { role: 'user', content: ragUser };
     }
     messages.push(...recent);
+
+    // V45: Agent 模式 → 走 ReAct 循环
+    if (this.useAgent && this.enabledTools.length > 0) {
+      await this.runAgentReAct(q, messages, sessionId, kbCitations, webCitations);
+      this.sending = false;
+      this.currentAbort = null;
+      return;
+    }
 
     // 5) 流式请求 — V42: AbortController 让 ⏹ 停止按钮能用
     this.currentAbort = new AbortController();
@@ -458,9 +485,10 @@ export class LlChatPanel extends LitElement {
     sessionId: string,
     fullText: string,
     kbCitations: SearchResult[],
-    webCitations: WebResult[]
+    webCitations: WebResult[],
+    agentSteps?: AgentStep[]
   ) {
-    if (!fullText) return; // 空内容不入库(避免 400)
+    if (!fullText && (!agentSteps || agentSteps.length === 0)) return; // 空内容不入库(避免 400)
     const citationsBlob = JSON.stringify({ kb: kbCitations, web: webCitations });
     const assistantId = await appendChatMessage({
       role: 'assistant',
@@ -469,10 +497,139 @@ export class LlChatPanel extends LitElement {
       sessionId,
     });
     // 用真实 id 回填 assistantMsg，让下次 send() 的 filter `m.id !== 0` 不会误排除它
-    const finalAssistant = { ...this.messages[this.messages.length - 1], id: assistantId, streaming: false };
+    const finalAssistant = {
+      ...this.messages[this.messages.length - 1],
+      id: assistantId,
+      streaming: false,
+      agentSteps: agentSteps || (this.messages[this.messages.length - 1] as any).agentSteps,
+    };
     this.messages = this.messages.map((m, i) =>
       i === this.messages.length - 1 ? finalAssistant : m
     );
+  }
+
+  /** V45: Agent ReAct 主循环 — 最多 5 步工具调用 */
+  private async runAgentReAct(
+    originalQuery: string,
+    initialMessages: ChatMessage[],
+    sessionId: string,
+    initialKb: SearchResult[],
+    initialWeb: any[]
+  ) {
+    const ctx: AgentContext = {
+      searchPaths: this.searchPaths,
+      webSettings: this.web,
+      signal: this.currentAbort?.signal,
+    };
+    const messages: ChatMessage[] = [...initialMessages];
+    // 把"原 query"作为最后一条 user
+    if (messages.length === 0 || messages[messages.length - 1].role !== 'user') {
+      messages.push({ role: 'user', content: originalQuery });
+    } else {
+      // 已经是 user,保持
+    }
+    const steps: AgentStep[] = [];
+    let fullAnswer = '';
+    let finalKb = [...initialKb];
+    let finalWeb = [...initialWeb];
+
+    const MAX_STEPS = 5;
+    for (let i = 0; i < MAX_STEPS; i++) {
+      // 中途停止检查
+      if (this.currentAbort?.signal.aborted) break;
+      // 调 LLM(一次性,不流式,因为工具调用需要完整文本)
+      let llmText = '';
+      try {
+        llmText = await chatOnce(messages, this.settings);
+      } catch (e: any) {
+        llmText = `[Agent 错误: ${e?.message || e}]`;
+        steps.push({ step: i + 1, error: llmText, ts: Date.now() });
+        break;
+      }
+      // 解析工具调用
+      const parsed = parseToolCall(llmText);
+      const ts = Date.now();
+      if (!parsed || !parsed.tool) {
+        // 没有工具调用 → 最终答案
+        fullAnswer = parsed?.thought ? parsed.thought + '\n\n' + llmText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim() : llmText;
+        // 去掉 <tool_call> 残留
+        fullAnswer = fullAnswer.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+        steps.push({ step: i + 1, thought: parsed?.thought, ts });
+        break;
+      }
+      // 有工具调用 → 执行
+      const tc = parsed.tool;
+      // 检查是否启用
+      if (!this.enabledTools.includes(tc.name)) {
+        steps.push({
+          step: i + 1,
+          thought: parsed.thought,
+          tool: tc,
+          error: `工具 ${tc.name} 未启用`,
+          ts,
+        });
+        // 把错误作为 tool_result 让 LLM 知道
+        messages.push({ role: 'assistant', content: llmText });
+        messages.push({ role: 'user', content: wrapToolResult(tc.name, { error: `工具 ${tc.name} 未启用` }) });
+        continue;
+      }
+      // 执行
+      const stepStart = Date.now();
+      const execResult = await executeToolCall(tc, ctx);
+      const stepDuration = Date.now() - stepStart;
+      const resultText = execResult.ok
+        ? JSON.stringify(execResult.result, null, 2)
+        : `ERROR: ${execResult.error}`;
+      // resultText 用于调试日志,UI 用 execResult.result/result 字段
+      void resultText;
+      steps.push({
+        step: i + 1,
+        thought: parsed.thought,
+        tool: tc,
+        result: execResult.ok ? resultText : undefined,
+        error: execResult.ok ? undefined : execResult.error,
+        ts,
+        durationMs: stepDuration,
+      });
+      // 把 kb_search 结果合并到 finalKb(给 UI 显示引用卡片)
+      if (tc.name === 'kb_search' && execResult.ok && Array.isArray(execResult.result)) {
+        for (const r of execResult.result) {
+          finalKb.push({
+            path: r.path,
+            heading: r.heading || '',
+            title: r.title || r.path,
+            snippet: r.snippet || '',
+            score: r.score || 0,
+            mtime: Date.now(),
+          } as any);
+        }
+      }
+      if (tc.name === 'web_search' && execResult.ok && Array.isArray(execResult.result)) {
+        for (const r of execResult.result) {
+          finalWeb.push({ title: r.title, url: r.url, content: r.content });
+        }
+      }
+      // 更新 UI 显示当前 step
+      this.messages = this.messages.map((m, i) =>
+        i === this.messages.length - 1 ? { ...m, agentSteps: [...steps] } : m
+      );
+      // 拼到 messages
+      messages.push({ role: 'assistant', content: llmText });
+      messages.push({ role: 'user', content: wrapToolResult(tc.name, execResult.ok ? execResult.result : { error: execResult.error }) });
+    }
+    // 如果 5 步后没拿到答案,llmText 可能是最后一次循环的内容
+    if (!fullAnswer && messages.length > 0) {
+      fullAnswer = `[Agent 跑了 ${steps.length} 步,没拿到最终答案]\n\n最后一条消息:\n` +
+        messages[messages.length - 1].content.slice(0, 500);
+    }
+    // 更新 UI
+    this.messages = this.messages.map((m, i) =>
+      i === this.messages.length - 1
+        ? { ...m, content: fullAnswer, agentSteps: steps, streaming: false, ragStatus: { kb: finalKb.length, web: finalWeb.length, useKB: this.useKB, useWeb: this.useWeb } }
+        : m
+    );
+    // 持久化
+    await this.persistAssistant(sessionId, fullAnswer, finalKb, finalWeb, steps);
   }
 
   private async onClearHistory() {
@@ -609,6 +766,30 @@ export class LlChatPanel extends LitElement {
           </div>
         ` : nothing}
       </div>
+
+      ${this.useAgent ? html`
+        <div class="setting-row">
+          <label>Agent 工具</label>
+          <div class="agent-tool-toggles">
+            ${['kb_search', 'web_search', 'note_open', 'list_files', 'note_edit'].map(t => html`
+              <label class="tool-toggle">
+                <input type="checkbox"
+                  ?checked=${this.enabledTools.includes(t)}
+                  @change=${(e: Event) => {
+                    const on = (e.target as HTMLInputElement).checked;
+                    this.enabledTools = on
+                      ? [...this.enabledTools, t]
+                      : this.enabledTools.filter(x => x !== t);
+                  }} />
+                <span>${t}</span>
+              </label>
+            `)}
+          </div>
+        </div>
+        <div class="setting-hint" style="font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);margin-left:90px;margin-bottom:8px">
+          Agent 模式启用时,LLM 可调用工具(最多 5 步)。建议至少留 kb_search。
+        </div>
+      ` : nothing}
     `;
   }
 
@@ -673,6 +854,24 @@ export class LlChatPanel extends LitElement {
               : html`<span class="rag-tag off">⚪ RAG off</span>`}
             ${rag.useWeb ? html`<span class="rag-tag ${rag.web > 0 ? 'ok' : 'miss'}">${rag.web > 0 ? '🟢' : '🟡'} Web: ${rag.web} hit${rag.web === 1 ? '' : 's'}</span>` : nothing}
           </div>
+        ` : nothing}
+        ${m.agentSteps && m.agentSteps.length > 0 ? html`
+          <details class="agent-steps" open>
+            <summary>🤖 Agent 步骤 (${m.agentSteps.length})</summary>
+            ${m.agentSteps.map(s => html`
+              <div class="agent-step">
+                <div class="agent-step-head">
+                  <span class="agent-step-num">#${s.step}</span>
+                  ${s.tool ? html`<span class="agent-step-tool">🔧 ${s.tool.name}</span>` : ''}
+                  ${s.durationMs != null ? html`<span class="agent-step-dur">${s.durationMs}ms</span>` : ''}
+                </div>
+                ${s.thought ? html`<div class="agent-step-thought">💭 ${s.thought}</div>` : ''}
+                ${s.tool ? html`<div class="agent-step-args">${JSON.stringify(s.tool.args)}</div>` : ''}
+                ${s.error ? html`<div class="agent-step-error">❌ ${s.error}</div>` : ''}
+                ${s.result ? html`<details class="agent-step-result"><summary>结果</summary><pre>${s.result}</pre></details>` : ''}
+              </div>
+            `)}
+          </details>
         ` : nothing}
         <div class="chat-msg-content">${m.content}</div>
         ${!isUser && !m.streaming ? html`
