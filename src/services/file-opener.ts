@@ -454,83 +454,187 @@ async function indexLocalEpub(bytes: Uint8Array, name: string): Promise<void> {
     // 1) JSZip 解 zip
     const zip = await JSZip.loadAsync(bytes);
 
-    // 2) 读 META-INF/container.xml 找 rootfile
-    const containerXml = await zip.file('META-INF/container.xml')?.async('string');
+    // V50.1 修复: webview build 里 Object.keys(zip.files) 返回的 key 是 toString'd 字符串
+    // 形如 "77,69,84,65,45,73,78,70,..." (逗号分隔 ASCII 码) — 不是真实路径
+    // 但 zip.file(rawKey) 仍然能正常工作(zip 内部用同一 hash 索引)
+    // 用 rawKey 直接调 zip.file(),通过解码 rawKey 做文件名匹配
+    const rawKeys = Object.keys((zip as any).files);
+    const decodePath = (rawKey: string): string => {
+      if (rawKey.includes(',')) {
+        const codes = rawKey.split(',').map(s => parseInt(s, 10));
+        return codes.filter(c => !isNaN(c) && c > 0 && c < 0x110000).map(c => String.fromCharCode(c)).join('');
+      }
+      return rawKey;
+    };
+    const allFileObjs: { raw: string; decoded: string; entry: any }[] = [];
+    for (const raw of rawKeys) {
+      const decoded = decodePath(raw);
+      const entry = (zip as any).files[raw];
+      if (!entry?.dir) allFileObjs.push({ raw, decoded, entry });
+    }
+    // 用 raw key 直接调 zip.file()(匹配 JSZip 内部 hash)
+    // V50.1.3 webview JSZip async('string') 返回 toString'd 字符串 (逗号分隔 ASCII)
+    // 改用 async('uint8array') + TextDecoder 解码
+    const decodeUint8Array = (raw: any): string => {
+      if (raw instanceof Uint8Array) return new TextDecoder('utf-8').decode(raw);
+      if (typeof raw === 'string') {
+        if (raw.includes(',') && raw.length > 5) {
+          try {
+            const codes = raw.split(',').map(s => parseInt(s.trim(), 10));
+            if (codes.every(c => !isNaN(c) && c >= 0 && c < 0x110000)) {
+              return codes.map(c => String.fromCharCode(c)).join('');
+            }
+          } catch {}
+        }
+        return raw;
+      }
+      return String(raw);
+    };
+    const findExact = (path: string) => allFileObjs.find(o => o.decoded === path) || null;
+    const findCaseInsensitive = (path: string) => {
+      const target = path.toLowerCase();
+      return allFileObjs.find(o => o.decoded.toLowerCase() === target) || null;
+    };
+    const findBySuffix = (suffix: string) => {
+      const target = suffix.toLowerCase();
+      return allFileObjs.filter(o => o.decoded.toLowerCase().endsWith(target));
+    };
+    const readText = async (path: string): Promise<string | undefined> => {
+      const obj = findExact(path) || findCaseInsensitive(path);
+      if (!obj) return undefined;
+      const entry = (zip as any).file(obj.raw);
+      if (!entry) return undefined;
+      try {
+        const bytes = await entry.async('uint8array');
+        return new TextDecoder('utf-8').decode(bytes);
+      } catch (e) {
+        const s = await entry.async('string');
+        return decodeUint8Array(s);
+      }
+    };
+
+    // 2) 找 container.xml
+    let containerXml: string | undefined;
+    const containerObj = findExact('META-INF/container.xml') || findCaseInsensitive('META-INF/container.xml');
+    if (containerObj) {
+      try {
+        const bytes = await (zip as any).file(containerObj.raw)?.async('uint8array');
+        containerXml = bytes ? new TextDecoder('utf-8').decode(bytes) : undefined;
+      } catch (e) {
+        const s = await (zip as any).file(containerObj.raw)?.async('string');
+        containerXml = s ? decodeUint8Array(s) : undefined;
+      }
+    }
     if (!containerXml) {
-      console.warn('[file-opener] EPUB 缺少 META-INF/container.xml, 不是合法 EPUB');
+      const cands = findBySuffix('META-INF/container.xml');
+      if (cands.length > 0) {
+        try {
+          const bytes = await (zip as any).file(cands[0].raw)?.async('uint8array');
+          containerXml = bytes ? new TextDecoder('utf-8').decode(bytes) : undefined;
+        } catch (e) {
+          const s = await (zip as any).file(cands[0].raw)?.async('string');
+          containerXml = s ? decodeUint8Array(s) : undefined;
+        }
+      }
+    }
+    if (!containerXml) {
+      console.warn('[file-opener] EPUB 没有 META-INF/container.xml, 不是合法 EPUB. 实际文件数:', allFileObjs.length);
       return;
     }
+
+    // 3) 解析 container.xml 找 OPF path
     const containerDoc = new DOMParser().parseFromString(containerXml, 'application/xml');
-    const rootfileEl = containerDoc.querySelector('rootfile');
-    const opfPath = rootfileEl?.getAttribute('full-path');
+    // EPUB container.xml 是 namespaced: <container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+    let rootfileEl: Element | null = containerDoc.querySelector('rootfile');
+    if (!rootfileEl) {
+      rootfileEl = containerDoc.getElementsByTagNameNS('urn:oasis:names:tc:opendocument:xmlns:container', 'rootfile')[0] || null;
+    }
+    if (!rootfileEl) {
+      const all = containerDoc.querySelectorAll('*');
+      for (const el of Array.from(all)) {
+        if (el.localName === 'rootfile') { rootfileEl = el; break; }
+      }
+    }
+    const opfPath = rootfileEl?.getAttribute('full-path') || undefined;
     if (!opfPath) {
       console.warn('[file-opener] EPUB container.xml 没有 rootfile[full-path]');
       return;
     }
-    console.log('[file-opener] EPUB OPF:', opfPath);
 
-    // 3) 读 OPF
-    const opfXml = await zip.file(opfPath)?.async('string');
+    // 4) 读 OPF
+    let opfXml: string | undefined;
+    let opfActualPath: string | undefined;
+    const opfObj = findExact(opfPath) || findCaseInsensitive(opfPath);
+    if (opfObj) {
+      opfActualPath = opfObj.decoded;
+      try {
+        const bytes = await (zip as any).file(opfObj.raw)?.async('uint8array');
+        opfXml = bytes ? new TextDecoder('utf-8').decode(bytes) : undefined;
+      } catch (e) {
+        const s = await (zip as any).file(opfObj.raw)?.async('string');
+        opfXml = s ? decodeUint8Array(s) : undefined;
+      }
+    }
     if (!opfXml) {
       console.warn('[file-opener] EPUB 找不到 OPF:', opfPath);
       return;
     }
     const opfDoc = new DOMParser().parseFromString(opfXml, 'application/xml');
 
-    // 4) 解析 manifest (id → { href, mediaType }) + spine (idref 顺序)
+    // 5) 解析 manifest + spine (OPF 也是 namespaced,加 fallback)
     const manifest = new Map<string, { href: string; mediaType: string }>();
-    opfDoc.querySelectorAll('manifest > item').forEach(item => {
+    let itemEls = Array.from(opfDoc.querySelectorAll('manifest > item'));
+    if (itemEls.length === 0) itemEls = Array.from(opfDoc.getElementsByTagNameNS('http://www.idpf.org/2007/opf', 'item'));
+    if (itemEls.length === 0) itemEls = Array.from(opfDoc.getElementsByTagName('item'));
+    itemEls.forEach(item => {
       const id = item.getAttribute('id') || '';
       const href = item.getAttribute('href') || '';
       const mediaType = item.getAttribute('media-type') || '';
       if (id && href) manifest.set(id, { href, mediaType });
     });
-    const spineIds: string[] = [];
-    opfDoc.querySelectorAll('spine > itemref').forEach(ir => {
-      const idref = ir.getAttribute('idref');
-      if (idref) spineIds.push(idref);
-    });
-    console.log('[file-opener] EPUB spine:', spineIds.length, '章');
+    let itemrefEls = Array.from(opfDoc.querySelectorAll('spine > itemref'));
+    if (itemrefEls.length === 0) itemrefEls = Array.from(opfDoc.getElementsByTagNameNS('http://www.idpf.org/2007/opf', 'itemref'));
+    if (itemrefEls.length === 0) itemrefEls = Array.from(opfDoc.getElementsByTagName('itemref'));
+    const spineIds: string[] = itemrefEls.map(ir => ir.getAttribute('idref') || '').filter(Boolean);
+    console.log('[file-opener] EPUB 共', allFileObjs.length, '文件,', spineIds.length, '章');
 
-    // OPF 路径作为 base,resolve 相对路径
-    const opfBase = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
+    // 6) OPF 路径作为 base, resolve 相对路径
+    const opfBase = opfActualPath && opfActualPath.includes('/')
+      ? opfActualPath.substring(0, opfActualPath.lastIndexOf('/') + 1)
+      : '';
 
-    // 5) 按 spine 顺序遍历,只取 XHTML/HTML 章节
+    // 7) 按 spine 顺序遍历,只取 XHTML/HTML 章节
     const chapterParts: string[] = [];
+    let chaptersIndexed = 0;
     for (const id of spineIds) {
       const entry = manifest.get(id);
       if (!entry) continue;
       const mime = entry.mediaType.toLowerCase();
-      // 只取 XHTML / HTML(image/css/octet-stream 跳过)
-      if (!/(xhtml|html)$/.test(mime)) continue;
-      // resolve 相对路径(用 POSIX 路径在 zip 里定位)
+      // V50.1.9 修: application/xhtml+xml 末尾是 xml 不是 html,regex 改成子串匹配
+      if (!/(xhtml|html)/.test(mime)) continue;
       const href = entry.href;
       const fullPath = href.startsWith('/') ? href.substring(1) : (opfBase + href);
-      // EPUB zip 用 / 路径
       const zipPath = fullPath.replace(/\\/g, '/');
       try {
-        const xhtml = await zip.file(zipPath)?.async('string');
+        const xhtml = await readText(zipPath);
         if (!xhtml) {
           console.warn('[file-opener] EPUB 章节 zip 读取失败:', zipPath);
           continue;
         }
-        // 6) DOMParser 抽纯文本(用 text/html 兼容 XHTML 实体)
         const xhtmlDoc = new DOMParser().parseFromString(xhtml, 'text/html');
         const title = xhtmlDoc.querySelector('title')?.textContent?.trim()
                     || xhtmlDoc.querySelector('h1, h2, h3')?.textContent?.trim()
                     || entry.href.replace(/\.[xX]?[hH][tT][mM][lL]?$/, '');
         const body = xhtmlDoc.body;
         const text = body?.textContent?.trim() || '';
-        if (!text) {
-          console.log('[file-opener] EPUB 章节空文本,跳过:', entry.href);
-          continue;
-        }
+        if (!text) continue;
         chapterParts.push(`\n\n## ${title}\n\n${text}`);
+        chaptersIndexed++;
       } catch (chapterErr) {
         console.warn('[file-opener] EPUB 章节解析失败:', zipPath, chapterErr);
-        // 单章节失败容忍,继续下个
       }
     }
+    console.log('[file-opener] EPUB 索引章节:', chaptersIndexed, '/', spineIds.length);
 
     // 7) 拼接全文
     const fullDoc = chapterParts.join('').trim();
