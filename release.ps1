@@ -93,7 +93,8 @@ try {
   if ($DryRun) {
     Write-Host "  [DryRun] package.json: version $oldPkgVer -> $semver"
   } else {
-    ($pkg | ConvertTo-Json -Depth 10) | Set-Content package.json -Encoding UTF8
+    # PowerShell 5.1 Set-Content -Encoding UTF8 会写 BOM,改用 .NET API 避免 BOM
+    [System.IO.File]::WriteAllText('package.json', ($pkg | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
     Write-Host "  package.json: version $oldPkgVer -> $semver"
   }
 
@@ -112,7 +113,7 @@ try {
   $oldVer = $gradleVerMatch.Groups[1].Value
 
   # 幂等: 已同步则跳过
-  if ($oldVer -eq $semver -and $oldCode -ge $newCode) {
+  if ($oldVer -eq $semver) {
     $skipMsg = 'build.gradle: 已是 versionName=' + $semver + ' / versionCode=' + $oldCode + ', 跳过'
     Write-Host ('  ' + $skipMsg) -ForegroundColor Yellow
   } else {
@@ -126,7 +127,7 @@ try {
       $previewMsg = '  [DryRun] build.gradle: versionCode ' + $oldCode + ' -> ' + $newCode + ', versionName ' + $dq + $oldVer + $dq + ' -> ' + $dq + $semver + $dq
       Write-Host $previewMsg
     } else {
-      Set-Content android\app\build.gradle $newGradle -Encoding UTF8
+      [System.IO.File]::WriteAllText('android\app\build.gradle', $newGradle, [System.Text.UTF8Encoding]::new($false))
       $doneMsg = '  build.gradle: versionCode ' + $oldCode + ' -> ' + $newCode + ', versionName ' + $dq + $oldVer + $dq + ' -> ' + $dq + $semver + $dq
       Write-Host $doneMsg
     }
@@ -135,8 +136,8 @@ try {
 catch {
   Write-Host "  bump version 失败, 还原改前内容..." -ForegroundColor Red
   if (-not $DryRun) {
-    Set-Content package.json $pkgBak -Encoding UTF8
-    Set-Content android\app\build.gradle $gradleBak -Encoding UTF8
+    [System.IO.File]::WriteAllText('package.json', $pkgBak, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText('android\app\build.gradle', $gradleBak, [System.Text.UTF8Encoding]::new($false))
   }
   throw
 }
@@ -202,7 +203,8 @@ if ($DryRun) {
   if (-not $status) {
     Write-Host "  没有新改动,跳过 commit" -ForegroundColor Yellow
   } else {
-    git commit -m "v${NewVersion}: $Message"
+    # $NewVersion 已含 'v',直接用 (避免双 v)
+    git commit -m "${NewVersion}: $Message"
     git push origin main
   }
 }
@@ -217,7 +219,7 @@ if ($DryRun) {
   if ($existingTag) {
     Write-Host "  tag $NewVersion 已存在,跳过" -ForegroundColor Yellow
   } else {
-    git tag -a $NewVersion -m "v${NewVersion}: $Message"
+    git tag -a $NewVersion -m "${NewVersion}: $Message"
     git push origin $NewVersion
   }
 }
@@ -228,8 +230,14 @@ Write-Host "[7/8] gh release create + 挂 APK" -ForegroundColor Cyan
 if ($DryRun) {
   Write-Host "  [DryRun] 跳过"
 } else {
-  $existingRelease = gh release view $NewVersion 2>&1 | Out-String
-  if ($LASTEXITCODE -eq 0) {
+  # gh release view 在 release 不存在时 throw RemoteException,用 try/catch 兜底
+  $existingRelease = $null
+  try {
+    $existingRelease = gh release view $NewVersion 2>&1 | Out-String
+  } catch {
+    $existingRelease = ''
+  }
+  if ($LASTEXITCODE -eq 0 -and $existingRelease) {
     Write-Host "  release $NewVersion 已存在,改用 gh release upload 补 APK" -ForegroundColor Yellow
     gh release upload $NewVersion $apk --clobber
   } else {
