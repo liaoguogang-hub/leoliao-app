@@ -186,6 +186,56 @@ ll-app {
   text-align: center;
 }
 
+/* V43: 节点长按/右键菜单 */
+.ctx-menu {
+  position: fixed;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+  min-width: 180px;
+  z-index: 1000;
+  overflow: hidden;
+}
+.ctx-menu-head {
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+.ctx-menu-item {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  transition: background 0.1s;
+}
+.ctx-menu-item:hover {
+  background: var(--border);
+}
+.ctx-menu-item.danger:hover {
+  background: rgba(220, 80, 80, 0.15);
+  color: #d05050;
+}
+/* V43: 触发节点加微弱高亮反馈(让用户知道可长按) */
+.ctx-trigger {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
 .tree details.dir {
   margin-left: calc(var(--d, 0) * 8px);
 }
@@ -369,6 +419,7 @@ ll-app {
   border-bottom: 1px solid var(--border);
   padding-bottom: 16px;
   margin-bottom: 20px;
+  position: relative;
 }
 
 .note-title {
@@ -378,6 +429,119 @@ ll-app {
   margin-bottom: 8px;
   word-break: break-word;
 }
+
+/* V43: 编辑/保存/取消按钮 */
+.note-actions {
+  position: absolute;
+  top: 0;
+  right: 16px;
+  display: flex;
+  gap: 6px;
+}
+.note-btn {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.note-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.note-btn.primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.note-btn.primary:hover {
+  opacity: 0.85;
+}
+.note-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* V43: 编辑模式 toolbar */
+.note-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  flex-wrap: wrap;
+}
+.tb-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg);
+  padding: 4px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  min-width: 32px;
+}
+.tb-btn:hover {
+  background: var(--border);
+  border-color: var(--border);
+}
+.tb-meta {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+/* V43: 编辑 textarea */
+.note-editor-textarea {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+.note-editor-textarea:focus {
+  border-color: var(--accent);
+}
+
+/* V43: 预览面板(编辑模式下) */
+.note-preview {
+  margin-top: 16px;
+  padding: 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.note-preview-label {
+  font-size: 11px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.note.editing .note-body { display: none; }
 
 .note-meta {
   display: flex;
@@ -1899,6 +2063,95 @@ ll-app {
 @keyframes pulse-stop {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.7; }
+}
+
+/* === V43: 节点操作 / 新建 / 重命名 / 移动 modal === */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+.modal-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  width: 100%;
+  max-width: 480px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.modal-box h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: var(--accent);
+}
+.modal-sub {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  word-break: break-all;
+}
+.modal-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 12px;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.modal-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 14px;
+  outline: none;
+  box-sizing: border-box;
+}
+.modal-input:focus {
+  border-color: var(--accent);
+}
+.modal-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+.modal-btn {
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+.modal-btn:hover {
+  border-color: var(--accent);
+}
+.modal-btn.primary {
+  background: var(--accent);
+  color: var(--bg);
+  border-color: var(--accent);
+}
+.modal-btn.primary:hover {
+  opacity: 0.85;
 }
 
 /* === V42: PDF 内嵌预览 === */

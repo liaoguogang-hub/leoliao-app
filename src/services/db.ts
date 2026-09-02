@@ -153,6 +153,42 @@ export async function clearAllNotes(): Promise<void> {
   await db().notes.clear();
 }
 
+/** V43: 重命名/移动笔记(改 path + 同时更新 manifest)
+ *  返回新 path(失败抛错)
+ */
+export async function renameNote(oldPath: string, newPath: string): Promise<string> {
+  if (oldPath === newPath) return oldPath;
+  if (!newPath || newPath === oldPath) throw new Error('新路径不能为空或与原路径相同');
+  // 1. 读旧笔记
+  const old = await db().notes.get(oldPath);
+  if (!old) throw new Error(`笔记不存在: ${oldPath}`);
+  // 2. 检查新路径是否冲突
+  const exists = await db().notes.get(newPath);
+  if (exists) throw new Error(`目标路径已存在: ${newPath}`);
+  // 3. 删旧,加新
+  const newSize = new TextEncoder().encode(old.content).length;
+  await db().notes.put({
+    path: newPath,
+    content: old.content,
+    mtime: Date.now(),
+    hash: old.hash,
+    cachedAt: Date.now(),
+  });
+  await db().notes.delete(oldPath);
+  // 4. 更新 manifest entry(主键 = path)
+  const oldEntry = await db().manifest.get(oldPath);
+  if (oldEntry) {
+    await db().manifest.put({ ...oldEntry, path: newPath, mtime: Date.now(), size: newSize });
+    await db().manifest.delete(oldPath);
+  }
+  return newPath;
+}
+
+/** V43: 删 manifest 条目(与 deleteNote 配合用,保证两边一致) */
+export async function deleteManifestEntry(path: string): Promise<void> {
+  await db().manifest.delete(path);
+}
+
 /* === Welcome 开机欢迎图 === */
 
 export async function loadAllWelcome(): Promise<CachedWelcome[]> {
