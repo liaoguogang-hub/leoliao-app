@@ -93,7 +93,8 @@ try {
   if ($DryRun) {
     Write-Host "  [DryRun] package.json: version $oldPkgVer -> $semver"
   } else {
-    ($pkg | ConvertTo-Json -Depth 10) | Set-Content package.json -Encoding UTF8
+    # PowerShell 5.1 Set-Content -Encoding UTF8 会写 BOM,build.gradle 不能带 BOM
+    [System.IO.File]::WriteAllText('package.json', ($pkg | ConvertTo-Json -Depth 10), [System.Text.UTF8Encoding]::new($false))
     Write-Host "  package.json: version $oldPkgVer -> $semver"
   }
 
@@ -126,7 +127,7 @@ try {
       $previewMsg = '  [DryRun] build.gradle: versionCode ' + $oldCode + ' -> ' + $newCode + ', versionName ' + $dq + $oldVer + $dq + ' -> ' + $dq + $semver + $dq
       Write-Host $previewMsg
     } else {
-      Set-Content android\app\build.gradle $newGradle -Encoding UTF8
+      [System.IO.File]::WriteAllText('android\app\build.gradle', $newGradle, [System.Text.UTF8Encoding]::new($false))
       $doneMsg = '  build.gradle: versionCode ' + $oldCode + ' -> ' + $newCode + ', versionName ' + $dq + $oldVer + $dq + ' -> ' + $dq + $semver + $dq
       Write-Host $doneMsg
     }
@@ -135,8 +136,8 @@ try {
 catch {
   Write-Host "  bump version 失败, 还原改前内容..." -ForegroundColor Red
   if (-not $DryRun) {
-    Set-Content package.json $pkgBak -Encoding UTF8
-    Set-Content android\app\build.gradle $gradleBak -Encoding UTF8
+    [System.IO.File]::WriteAllText('package.json', $pkgBak, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText('android\app\build.gradle', $gradleBak, [System.Text.UTF8Encoding]::new($false))
   }
   throw
 }
