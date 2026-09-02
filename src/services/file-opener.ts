@@ -385,7 +385,8 @@ async function indexLocalPdf(pdf: any, name: string, totalPages: number): Promis
     const { saveChunks, saveChunkVectors } = await import('./db');
     const { chunkDocument, chunkHash } = await import('./chunker');
     const { embedText } = await import('./embedder');
-    const pdfId = `📕 ${name}.pdf`;
+    // V50.14: name 已带 .pdf, 不再加
+    const pdfId = `📕 ${name}`;
     // 删旧(防止重复打开堆积)
     await saveChunks(pdfId, []);
     // 1) 提取所有页文字
@@ -472,7 +473,8 @@ async function indexLocalEpub(bytes: Uint8Array, name: string): Promise<void> {
     const { saveChunks, saveChunkVectors } = await import('./db');
     const { chunkDocument, chunkHash } = await import('./chunker');
     const { embedText } = await import('./embedder');
-    const epubId = `📘 ${name}.epub`;
+    // V50.14: name 已带 .epub, 不再加
+    const epubId = `📘 ${name}`;
 
     // 1) JSZip 解 zip
     const zip = await JSZip.loadAsync(bytes);
