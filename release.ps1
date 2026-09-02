@@ -262,7 +262,7 @@ $Message
     $notesFile = "$env:TEMP\leoliao_release_notes.md"
     Set-Content -Path $notesFile -Value $notes -Encoding UTF8
     gh release create $NewVersion $apk `
-      --title "leoliao-app v${NewVersion}" `
+      --title "leoliao-app ${NewVersion}" `
       --notes-file $notesFile
   }
 }

@@ -26,7 +26,17 @@
 ## 🔧 改动
 
 ```
-[填实际 git diff --stat + 真实 commit hash]
+[主 commit] ed3ce4b: file-opener.ts: +JSZip + renderEpub + indexLocalEpub + PICK_TYPES
+              search.ts: line 112 📘 过滤
+              main.ts: line 662 title 加 epub
+              package.json: +jszip@^3.10.1
+              release.ps1: +[1/8] bump version + -DryRun + 修双 v + 修 BOM + 修幂等
+              .gitignore: +.devtools/*.png 等
+              .devtools/: +release-notes-v110.md +verify-v110.mjs + 历史归档入仓
+
+[版本 commit] ed3ce4b 自动 bump:
+              package.json: 1.1.2 → 1.10.0
+              android/app/build.gradle: versionCode 5 → 6, versionName "1.1.2" → "1.10.0"
 ```
 
 | 文件 | 改了什么 |
@@ -57,9 +67,9 @@
 
 ## 🔗 链接
 
-- Release: [URL 占位, 发版后填]
-- Commit: [hash 占位]
-- APK: `app-release.apk`(versionName 1.10.0, versionCode 6)
+- Release: https://github.com/liaoguogang-hub/leoliao-app/releases/tag/v1.10.0-epub
+- Commit: ed3ce4b (v1.10.0-epub: EPUB 入 KB 检索 + release.ps1 自动版本号同步)
+- APK: `app-debug.apk`(5.46 MB, versionName 1.10.0, versionCode 6)
 
 ## 📝 v1.11 候选
 
