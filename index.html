@@ -11,6 +11,33 @@
     globalThis.Buffer.prototype.toString = function(){return String(this._s)};
     globalThis.Buffer.from = function(s){return new globalThis.Buffer(s)};
     globalThis.Buffer.isBuffer = function(o){return o instanceof globalThis.Buffer};
+    // V42: Iterator helpers polyfill (Stage 4 proposal, es2025+)
+    // PDF.js 6.x 用 Iterator.prototype.{map,filter,join,...},旧 WebView / 部分 Android System WebView 没
+    if (typeof globalThis.Iterator === 'undefined') {
+      globalThis.Iterator = function Iterator() {};
+      // Iterator.from(iter) → 包装任意 iterable 为 Iterator-like
+      globalThis.Iterator.from = function (it) {
+        if (it && typeof it[Symbol.iterator] === 'function') return it[Symbol.iterator]();
+        throw new TypeError('Iterator.from requires iterable');
+      };
+      const proto = (globalThis.Iterator.prototype = {});
+      const addHelper = (name, fn) => {
+        if (typeof proto[name] !== 'function') proto[name] = fn;
+      };
+      // Iterator.prototype.map(fn) → 异步? 不,helpers 是同步的(尽管基础是 generator)
+      addHelper('map', function* (fn) { for (const x of this) yield fn(x, this); });
+      addHelper('filter', function* (fn) { for (const x of this) if (fn(x, this)) yield x; });
+      addHelper('take', function (n) { const it = this[Symbol.iterator](); return { [Symbol.iterator]() { return this; }, next() { if (n-- <= 0) return { done: true }; const r = it.next(); return r.done ? { done: true } : { value: r.value, done: false }; } }; });
+      addHelper('drop', function (n) { const it = this[Symbol.iterator](); let skipped = false; return { [Symbol.iterator]() { return this; }, next() { if (!skipped) { for (let i = 0; i < n; i++) { const r = it.next(); if (r.done) return { done: true }; } skipped = true; } return it.next(); } }; });
+      addHelper('flatMap', function* (fn) { for (const x of this) for (const y of fn(x, this)) yield y; });
+      addHelper('reduce', function (fn, init) { let acc = init, first = init === undefined; for (const x of this) { if (first) { acc = x; first = false; } else { acc = fn(acc, x, this); } } return acc; });
+      addHelper('toArray', function () { return [...this]; });
+      addHelper('forEach', function (fn) { for (const x of this) fn(x, this); });
+      addHelper('some', function (fn) { for (const x of this) if (fn(x, this)) return true; return false; });
+      addHelper('every', function (fn) { for (const x of this) if (!fn(x, this)) return false; return true; });
+      addHelper('find', function (fn) { for (const x of this) if (fn(x, this)) return x; });
+      addHelper('join', function (sep) { return [...this].join(sep); });
+    }
   </script>
 </head>
 <body>

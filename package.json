@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@capacitor/android": "^6.1.2",
+    "@capacitor/clipboard": "^6.0.3",
     "@capacitor/core": "^6.1.2",
     "@capacitor/filesystem": "^6.0.4",
     "@capacitor/share": "^6.0.4",
@@ -26,7 +27,8 @@
     "jspdf": "^4.2.1",
     "lit": "^3.2.1",
     "mammoth": "^1.12.0",
-    "markdown-it": "^14.1.0"
+    "markdown-it": "^14.1.0",
+    "pdfjs-dist": "^6.3.289"
   },
   "devDependencies": {
     "@capacitor/cli": "^6.1.2",

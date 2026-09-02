@@ -1,6 +1,6 @@
 /**
  * 本地文件打开服务 — V33
- * 支持:md / html / htm / txt / 图片(jpg/png/webp/gif) / docx
+ * 支持:md / html / htm / txt / 图片(jpg/png/webp/gif) / docx / pdf (V42)
  *
  * 流程:
  *   1. FilePicker 调 Android SAF,返回 content:// URI
@@ -10,12 +10,20 @@
  * pptx 不做(无客户端方案)
  *
  * V39:新增 renderBytesToHtml(history 快照恢复)— 用历史里存的 Uint8Array 重新打开
+ * V42:PDF 用 pdfjs-dist 内嵌渲染前 5 页(完整版提示用户在系统打开)
  */
 
 import { FilePicker, PickedFile } from '@capawesome/capacitor-file-picker';
 import DOMPurify from 'dompurify';
 import mammoth from 'mammoth';
 import MarkdownIt from 'markdown-it';
+import * as pdfjsLib from 'pdfjs-dist';
+// Vite ?url 把 worker 单独打成资源,运行时 fetch
+// @ts-ignore - Vite 虚拟模块
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+// V42: 配置 PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl as unknown as string;
 
 /** 打开的文件类型(给 SAF 过滤) */
 const PICK_TYPES = [
@@ -175,12 +183,7 @@ async function renderBytes(info: { name: string; ext: string; mimeType: string; 
         }
       }
       case 'pdf':
-        return makeFile(
-          name, ext, mimeType, bytes, undefined,
-          `<div class="file-warn">📕 PDF 渲染尚未支持,请用 WPS 打开</div>`,
-          'local',
-          'PDF 暂不支持'
-        );
+        return await renderPdf(name, ext, mimeType, bytes);
       case 'ppt':
       case 'pptx':
         return makeFile(
@@ -273,4 +276,68 @@ function bytesToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/* === V42: PDF.js 内嵌渲染 ===
+ * 把 PDF 前 N 页渲染成 PNG dataUrl,塞进 file-viewer 的 html 字段
+ * (canvas 不能直接 innerHTML,所以每页都 toDataURL → <img>)
+ * 默认上限 5 页,防止大 PDF 卡死;超出提示用户在系统打开
+ */
+const PDF_MAX_PAGES = 5;        // 一次最多渲染几页
+const PDF_RENDER_SCALE = 1.5;   // 渲染清晰度(1.0 = 72dpi,1.5 = 108dpi)
+
+async function renderPdf(
+  name: string,
+  ext: string,
+  mimeType: string,
+  bytes: Uint8Array
+): Promise<OpenedFile> {
+  try {
+    console.log('[file-opener] PDF 开始渲染, size=', bytes.byteLength, 'name=', name);
+    // PDF.js 要 ArrayBuffer
+    const buffer = bytesToArrayBuffer(bytes);
+    const loadingTask = pdfjsLib.getDocument({ data: buffer });
+    const pdf = await loadingTask.promise;
+    const totalPages = pdf.numPages;
+    console.log('[file-opener] PDF 共', totalPages, '页');
+
+    const renderLimit = Math.min(totalPages, PDF_MAX_PAGES);
+    const imgs: string[] = [];
+    for (let i = 1; i <= renderLimit; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D context 不可用');
+      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+      imgs.push(`<div class="pdf-page"><div class="pdf-page-num">第 ${i} / ${totalPages} 页</div><img src="${canvas.toDataURL('image/png')}" alt="第${i}页" /></div>`);
+    }
+
+    const truncated = totalPages > PDF_MAX_PAGES;
+    const tip = truncated
+      ? `<div class="file-warn">📌 共 ${totalPages} 页,仅渲染前 ${PDF_MAX_PAGES} 页。完整 PDF 请用系统阅读器打开。</div>`
+      : `<div class="file-warn" style="background:rgba(80,160,80,0.1);color:#2d9d5f">✅ 完整渲染 ${totalPages} 页</div>`;
+
+    const html = `${tip}<div class="pdf-pages">${imgs.join('')}</div>`;
+    return makeFile(
+      name, ext, mimeType, bytes, undefined,
+      html, 'local',
+      truncated ? `PDF ${totalPages} 页,仅渲染前 ${PDF_MAX_PAGES} 页` : `PDF ${totalPages} 页`
+    );
+  } catch (e: any) {
+    console.error('[file-opener] PDF 渲染失败:', e);
+    return makeFile(
+      name, ext, mimeType, bytes, undefined,
+      `<div class="file-error">
+        <strong>⚠️ PDF 渲染失败</strong><br>
+        错误:${escapeHtml(e?.message || String(e))}<br>
+        类型:${escapeHtml(e?.name || '?')}<br>
+        <p style="margin-top:8px;font-size:13px">💡 文件可能损坏或加密。请用 WPS / Adobe Acrobat 打开。</p>
+      </div>`,
+      'local',
+      `PDF 渲染失败: ${e?.message || e}`
+    );
+  }
 }
