@@ -20,6 +20,7 @@
     "@capacitor/filesystem": "^6.0.4",
     "@capacitor/share": "^6.0.4",
     "@capawesome/capacitor-file-picker": "^6.2.0",
+    "@xenova/transformers": "^2.17.2",
     "dexie": "^4.0.10",
     "dompurify": "^3.4.11",
     "gray-matter": "^4.0.3",

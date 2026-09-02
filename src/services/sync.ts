@@ -17,6 +17,7 @@ import { MOCK_MANIFEST, MOCK_FILES } from '../data/mock-data';
 import * as DB from './db';
 import { parseNote } from './renderer';
 import { chunkDocument, chunkHash } from './chunker';
+import { buildVectorIndex } from '../lib/search';
 
 interface SyncSourceConfig {
   type: SyncSource;
@@ -178,6 +179,11 @@ async function syncFromOSS(): Promise<ManifestEntry[]> {
 
   // V44: 同步 chunk 切分(所有已缓存的 notes → chunks)
   await reindexChunks(manifest);
+
+  // V48: 异步建向量索引(后台,不阻塞 sync)
+  buildVectorIndex().then(({ indexed, total }) => {
+    console.log(`[sync] vector indexed: ${indexed}/${total} chunks`);
+  }).catch(e => console.warn('[sync] vector index failed', e));
 
   // synced 按「真实缓存状态」统计:显示 1258/1258 即代表确实全部缓存
   const synced = manifest.length - toFetch.length;

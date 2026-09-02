@@ -48,6 +48,8 @@ class LeoLiaoDB extends Dexie {
   /** V46: 长期记忆 — 主题(items 是 sub-items) */
   memoryTopics!: Table<MemoryTopicRow, string>;
   memoryItems!: Table<MemoryItemRow, number>;
+  /** V48: 向量索引(主键 [path+idx],vec 是 Float32Array) */
+  chunkVectors!: Table<ChunkVectorRow, [string, number]>;
 
   constructor() {
     super('leoliao');
@@ -107,6 +109,19 @@ class LeoLiaoDB extends Dexie {
       memoryTopics: 'id, createdAt, lastUsed',
       memoryItems: '++id, topicId, ts',
     });
+    // V48: 向量索引 chunkVectors(主键 [path+idx],path 索引)
+    this.version(8).stores({
+      manifest: 'path, mtime, hash',
+      notes: 'path, mtime, cachedAt',
+      welcome: 'name, hash',
+      history: 'id, type, openedAt',
+      chat: '++id, ts, sessionId',
+      chatSessions: 'id, updatedAt',
+      chunks: '[path+idx], path',
+      memoryTopics: 'id, createdAt, lastUsed',
+      memoryItems: '++id, topicId, ts',
+      chunkVectors: '[path+idx], path',
+    });
   }
 }
 
@@ -165,6 +180,17 @@ export interface MemoryItemRow {
   content: string;          // 条目内容
   source?: string;          // 来源路径(笔记或会话 id)
   ts: number;               // 时间戳
+}
+
+/** V48: chunk 向量(主键 [path+idx],vec 是 Float32Array 二进制) */
+export interface ChunkVectorRow {
+  path: string;             // 所属笔记路径
+  idx: number;              // chunk 在笔记内的 index
+  /** 二进制向量数据(Dexie 支持 ArrayBuffer / Float32Array) */
+  vec: Float32Array;
+  dim: number;              // 向量维度(冗余便于兼容)
+  hash: string;             // chunk hash(用于 skip 未变)
+  mtime: number;
 }
 
 let _db: LeoLiaoDB | null = null;
@@ -303,6 +329,37 @@ export async function exportAllMemory(): Promise<{ topics: MemoryTopicRow[]; ite
   const topics = await db().memoryTopics.toArray();
   const items = await db().memoryItems.toArray();
   return { topics, items };
+}
+
+/* === V48: 向量索引 CRUD === */
+
+/** 取所有 chunk 向量(用于检索时一次加载) */
+export async function loadAllChunkVectors(): Promise<ChunkVectorRow[]> {
+  return await db().chunkVectors.toArray();
+}
+
+/** 批量写入某笔记的所有 chunk vectors */
+export async function saveChunkVectors(path: string, rows: Array<Omit<ChunkVectorRow, 'path'>>): Promise<void> {
+  await db().chunkVectors.where('path').equals(path).delete();
+  if (rows.length > 0) {
+    const fullRows: ChunkVectorRow[] = rows.map(r => ({ ...r, path }));
+    await db().chunkVectors.bulkPut(fullRows);
+  }
+}
+
+/** 删某 path 的所有向量 */
+export async function deleteChunkVectorsForNote(path: string): Promise<void> {
+  await db().chunkVectors.where('path').equals(path).delete();
+}
+
+/** 取某 path 的向量数 */
+export async function countChunkVectorsForNote(path: string): Promise<number> {
+  return await db().chunkVectors.where('path').equals(path).count();
+}
+
+/** 取所有向量的总数 */
+export async function totalChunkVectors(): Promise<number> {
+  return await db().chunkVectors.count();
 }
 
 /** V43: 重命名/移动笔记(改 path + 同时更新 manifest)

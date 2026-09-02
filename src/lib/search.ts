@@ -9,6 +9,13 @@
  */
 
 import { db } from '../services/db';
+import { embedText, topKByVector, rrfFuse } from '../services/embedder';
+import {
+  loadAllChunkVectors, totalChunkVectors, saveChunkVectors,
+  type ChunkVectorRow,
+} from '../services/db';
+
+export type SearchMode = 'bm25' | 'vector' | 'hybrid';
 
 export interface SearchResult {
   path: string;             // 所属笔记路径
@@ -82,15 +89,28 @@ function extractSnippet(content: string, qTokens: string[]): string {
 }
 
 /**
- * 主入口:对所有 chunks 跑 BM25,返回 top-K
+ * 主入口 — V48: 混合检索(BM25 + 向量 + RRF 融合)
  *
  * @param query  查询字符串
  * @param k      最大返回条数(默认 9999 = 全召回)
  * @param maxChars 字符数安全阀(默认 30000 字 ≈ 10K tokens)
  * @param paths  可选 — 限定检索范围(文件夹前缀列表,空=全部)
- *               例: ['01.公众号', '02.技术']
+ * @param mode   检索模式:'bm25' | 'vector' | 'hybrid'(默认 hybrid)
  */
-export async function search(query: string, k = 9999, maxChars = 30000, paths: string[] = []): Promise<SearchResult[]> {
+export async function search(
+  query: string,
+  k = 9999,
+  maxChars = 30000,
+  paths: string[] = [],
+  mode: SearchMode = 'hybrid'
+): Promise<SearchResult[]> {
+  if (mode === 'bm25') return searchBM25(query, k, maxChars, paths);
+  if (mode === 'vector') return searchVector(query, k, maxChars, paths);
+  return searchHybrid(query, k, maxChars, paths);
+}
+
+/** V48: BM25 单跑 */
+async function searchBM25(query: string, k: number, maxChars: number, paths: string[]): Promise<SearchResult[]> {
   const q = query.trim();
   if (!q) return [];
   const qTokens = tokenize(q);
@@ -164,6 +184,104 @@ export async function search(query: string, k = 9999, maxChars = 30000, paths: s
     totalChars += rChars;
   }
   return limited;
+}
+
+/** V48: 向量检索(query → cosine sim top-K) */
+async function searchVector(query: string, k: number, maxChars: number, paths: string[]): Promise<SearchResult[]> {
+  const q = query.trim();
+  if (!q) return [];
+  const allVecs = await loadAllChunkVectors();
+  if (allVecs.length === 0) {
+    console.warn('[search] no vectors, fallback to BM25');
+    return searchBM25(query, k, maxChars, paths);
+  }
+  // paths 过滤
+  const filtered = paths.length > 0
+    ? allVecs.filter(v => paths.some(p => v.path === p || v.path.startsWith(p + '/')))
+    : allVecs;
+  if (filtered.length === 0) return [];
+
+  const qVec = embedText(q);
+  // 准备候选 (查 chunks 表拿 heading/mtime)
+  const allChunks = await db().chunks.toArray();
+  const chunkMap = new Map<string, typeof allChunks[0]>();
+  for (const c of allChunks) chunkMap.set(`${c.path}#${c.idx}`, c);
+
+  const candidates = filtered.map(v => ({ path: v.path, idx: v.idx, vec: v.vec }));
+  const top = topKByVector(qVec, candidates, k);
+  const results: SearchResult[] = [];
+  let totalChars = 0;
+  for (const r of top) {
+    const chunk = chunkMap.get(`${r.path}#${r.idx}`);
+    if (!chunk) continue;
+    const snippet = chunk.content.length > 300 ? chunk.content.slice(0, 300) + '...' : chunk.content;
+    const rChars = snippet.length + chunk.heading.length + r.path.length + 50;
+    if (results.length > 0 && totalChars + rChars > maxChars) break;
+    results.push({
+      path: r.path,
+      idx: r.idx,
+      heading: chunk.heading,
+      title: titleFromPath(r.path),
+      snippet,
+      score: r.score,
+      mtime: chunk.mtime,
+    });
+    totalChars += rChars;
+  }
+  return results;
+}
+
+/** V48: 混合检索 — BM25 top50 + 向量 top50 → RRF 融合 */
+async function searchHybrid(query: string, k: number, maxChars: number, paths: string[]): Promise<SearchResult[]> {
+  const [bm25Top, vecTop] = await Promise.all([
+    searchBM25(query, 50, maxChars * 2, paths),
+    searchVector(query, 50, maxChars * 2, paths),
+  ]);
+  // 转成 (path, idx, score) 形式供 RRF
+  const bm25Items = bm25Top.map(r => ({ path: r.path, idx: r.idx, score: r.score, fullResult: r }));
+  const vecItems = vecTop.map(r => ({ path: r.path, idx: r.idx, score: r.score, fullResult: r }));
+  const fused = rrfFuse(bm25Items, vecItems, 60);
+  // 取回完整结果(优先 bm25,其次 vector)
+  const out: SearchResult[] = [];
+  let totalChars = 0;
+  for (const f of fused.slice(0, k)) {
+    const src = (f as any).a?.fullResult || (f as any).b?.fullResult;
+    if (!src) continue;
+    const rChars = src.snippet.length + src.title.length + src.path.length + src.heading.length + 50;
+    if (out.length > 0 && totalChars + rChars > maxChars) break;
+    out.push({ ...src, score: f.rrfScore });
+    totalChars += rChars;
+  }
+  return out;
+}
+
+/** V48: 把所有 chunks → 批量 embed → 写入 chunkVectors */
+export async function buildVectorIndex(onProgress?: (done: number, total: number) => void): Promise<{ indexed: number; total: number }> {
+  const allChunks = await db().chunks.toArray();
+  const existing = await loadAllChunkVectors();
+  const existMap = new Map<string, ChunkVectorRow>();
+  for (const v of existing) existMap.set(`${v.path}#${v.idx}`, v);
+  let indexed = 0;
+  const total = allChunks.length;
+  const BATCH = 50;
+  for (let i = 0; i < allChunks.length; i += BATCH) {
+    const batch = allChunks.slice(i, i + BATCH);
+    const rows = batch.map(c => {
+      const vec = embedText(c.content);
+      return { path: c.path, idx: c.idx, vec, dim: vec.length, hash: c.hash, mtime: c.mtime };
+    });
+    await saveChunkVectors(batch[0].path, rows);
+    indexed += batch.length;
+    if (onProgress) onProgress(indexed, total);
+  }
+  return { indexed, total };
+}
+
+/** V48: 索引状态 */
+export async function vectorIndexStatus(): Promise<{ total: number; chunks: number }> {
+  const total = await totalChunkVectors();
+  const chunks = await db().chunks.count();
+  return { total, chunks };
 }
 
 /** 把检索结果组装成 RAG 用的 system + user prompt(V44:含 heading 上下文) */

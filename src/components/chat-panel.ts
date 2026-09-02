@@ -15,7 +15,7 @@ import { LitElement, html, nothing } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { PROVIDERS, PROVIDER_LIST, type ProviderId } from '../lib/llm-providers';
 import { chatStream, testConnection, chatOnce, type ChatMessage, type LLMSettings } from '../lib/llm';
-import { search as kbSearch, buildFullRAGPrompt, type SearchResult } from '../lib/search';
+import { search as kbSearch, buildFullRAGPrompt, type SearchResult, type SearchMode } from '../lib/search';
 import { webSearch, WEB_PROVIDER_LIST, type WebSearchSettings } from '../lib/web-search';
 import {
   agentSystemPrompt, parseToolCall, executeToolCall, wrapToolResult,
@@ -98,6 +98,8 @@ export class LlChatPanel extends LitElement {
   @state() private searchPaths: string[] = [];
   @state() private showPathPicker = false;
   @state() private allDirs: string[] = [];
+  /** V48: 检索模式(bm25 / vector / hybrid) */
+  @state() private searchMode: SearchMode = 'hybrid';
   /** V45: Agent 启用的工具列表(默认全部启用) */
   @state() private enabledTools: string[] = ['kb_search', 'web_search', 'note_open', 'list_files', 'note_edit'];
   /** V46: 长期记忆设置 */
@@ -382,8 +384,8 @@ export class LlChatPanel extends LitElement {
     // DEBUG: 看真实 useKB/useWeb/maxTokens 状态
     console.log('[chat.send] q=', q, 'useKB=', this.useKB, 'useWeb=', this.useWeb, 'web.url=', this.web?.url, 'maxTokens=', this.settings.maxTokens);
     if (this.useKB) {
-      // V44: 传 searchPaths 限定范围(空=全部)
-      kbCitations = await kbSearch(q, 9999, 30000, this.searchPaths);
+      // V48: 传 searchMode(bm25 / vector / hybrid)+ searchPaths
+      kbCitations = await kbSearch(q, 9999, 30000, this.searchPaths, this.searchMode);
     }
     if (this.useWeb && this.web.url) {
       try {
@@ -837,6 +839,15 @@ export class LlChatPanel extends LitElement {
               <button class="link-clear" @click=${() => this.searchPaths = []}>× 清除</button>
             </div>
           ` : nothing}
+          <!-- V48: 检索模式 -->
+          <div class="setting-row">
+            <label>检索模式</label>
+            <select class="modal-input" @change=${(e: Event) => { this.searchMode = (e.target as HTMLSelectElement).value as SearchMode; }}>
+              <option value="hybrid" ?selected=${this.searchMode === 'hybrid'}>🔀 混合(BM25 + 向量)</option>
+              <option value="bm25" ?selected=${this.searchMode === 'bm25'}>📝 纯 BM25</option>
+              <option value="vector" ?selected=${this.searchMode === 'vector'}>🎯 纯向量</option>
+            </select>
+          </div>
         ` : nothing}
         </div>
 
