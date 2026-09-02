@@ -6,6 +6,7 @@ import './components/file-tree';
 import './components/note-view';
 import './components/settings-panel';
 import './components/help-panel';
+import './components/local-files-panel';
 import './components/share-panel';
 import './components/file-viewer';
 import './components/history-panel';
@@ -39,6 +40,7 @@ export class LlApp extends LitElement {
   @state() private showHelp = false;
   // V39: 历史 modal
   @state() private showHistory = false;
+  @state() private showLocalFiles = false;  // V51: 本地参考库面板
   @state() private localFile: OpenedFile | null = null;
   @state() private openingFile = false;
   @state() private openingNote = false;  // V37: 打开笔记时的加载态,避免用户以为没反应又点一次
@@ -573,11 +575,12 @@ export class LlApp extends LitElement {
   // V29: ESC 键关 modal/侧栏
   private handleKeydown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
-      if (this.showSettings || this.showShare || this.showHelp || this.showHistory) {
+      if (this.showSettings || this.showShare || this.showHelp || this.showHistory || this.showLocalFiles) {
         this.showSettings = false;
         this.showShare = false;
         this.showHelp = false;
         this.showHistory = false;
+        this.showLocalFiles = false;
       } else if (this.sidebarOpen) {
         this.sidebarOpen = false;
       }
@@ -668,6 +671,7 @@ export class LlApp extends LitElement {
               <button class="toolbar-btn" title="Wiki 主页" @click=${() => { this.showWiki = true; this.showSettings = false; this.showShare = false; this.showHelp = false; }}>📖</button>
               <!-- V39: 历史记录 -->
               <button class="toolbar-btn" title="历史打开过的笔记/文件" @click=${() => this.showHistory = true}>🕘</button>
+              <button class="toolbar-btn" title="本地参考库 (PDF / EPUB)" @click=${() => this.showLocalFiles = true}>📚</button>
               <button class="toolbar-btn" title="保存到本地" @click=${() => this.saveNote()}>💾</button>
               <button class="toolbar-btn" title="设置" @click=${() => { this.showSettings = true; this.showShare = false; this.showHelp = false; }}>⚙️</button>
               <button class="toolbar-btn" title="分享" @click=${() => { this.showShare = true; this.showSettings = false; this.showHelp = false; }}>↗️</button>
@@ -764,6 +768,12 @@ export class LlApp extends LitElement {
             @open-note=${(e: CustomEvent<string>) => this.handleHistoryOpenNote(e)}
             @open-local=${(e: CustomEvent<OpenedFile>) => this.handleHistoryOpenLocal(e)}
           ></ll-history-panel>
+        ` : null}
+
+        ${this.showLocalFiles ? html`
+          <ll-local-files-panel
+            @close=${() => this.showLocalFiles = false}
+          ></ll-local-files-panel>
         ` : null}
 
         ${this.showWiki ? html`

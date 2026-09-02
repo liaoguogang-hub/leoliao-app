@@ -433,6 +433,20 @@ async function indexLocalPdf(pdf: any, name: string, totalPages: number): Promis
     });
     await saveChunkVectors(pdfId, vecRows);
     console.log('[file-opener] PDF 索引完成:', chunks.length, 'chunks');
+
+    // V51: 自动存一份 md 进 vault — 让本地 PDF 出现在文件树 + 走 sync 上 OSS
+    try {
+      const { saveNote } = await import('./db');
+      const now = Date.now();
+      const notePath = `📕 ${name}.md`;
+      // 切每页 + 总字数, 加 frontmatter 标记来自本地 PDF
+      const noteContent = `---\nlocal-file: pdf\noriginal-name: ${name}\nchunks: ${chunks.length}\ntotal-chars: ${fullDoc.length}\n---\n\n# 📕 ${name}\n\n> 🤖 本地 PDF 自动入库(v1.10+)\n> 共 ${pdf.numPages} 页 / ${fullDoc.length} 字 / ${chunks.length} chunks\n> 原文:${name}.pdf\n\n${fullDoc}\n`;
+      const hash = await (await import('./chunker')).chunkHash(noteContent);
+      await saveNote(notePath, noteContent, now, hash);
+      console.log('[file-opener] PDF vault note 已存:', notePath);
+    } catch (noteErr) {
+      console.warn('[file-opener] PDF vault note 失败:', noteErr);
+    }
   } catch (e) {
     console.warn('[file-opener] indexLocalPdf 失败:', e);
   }
@@ -695,6 +709,20 @@ async function indexLocalEpub(bytes: Uint8Array, name: string): Promise<void> {
     });
     await saveChunkVectors(epubId, vecRows);
     console.log('[file-opener] EPUB 索引完成:', chunks.length, 'chunks');
+
+    // V51: 自动存一份 md 进 vault
+    try {
+      const { saveNote } = await import('./db');
+      const now = Date.now();
+      const notePath = `📘 ${name}.md`;
+      const noteContent = `---\nlocal-file: epub\noriginal-name: ${name}\nchunks: ${chunks.length}\ntotal-chars: ${fullDoc.length}\n---\n\n# 📘 ${name}\n\n> 🤖 本地 EPUB 自动入库(v1.10+)\n> 共 ${spineIds.length} 章 / 索引 ${chaptersIndexed} 章 / ${fullDoc.length} 字 / ${chunks.length} chunks\n> 原文:${name}.epub\n\n${fullDoc}\n`;
+      const { chunkHash } = await import('./chunker');
+      const hash = chunkHash(noteContent);
+      await saveNote(notePath, noteContent, now, hash);
+      console.log('[file-opener] EPUB vault note 已存:', notePath);
+    } catch (noteErr) {
+      console.warn('[file-opener] EPUB vault note 失败:', noteErr);
+    }
   } catch (e) {
     console.warn('[file-opener] indexLocalEpub 失败:', e);
   }
