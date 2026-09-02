@@ -140,6 +140,7 @@ export class LlApp extends LitElement {
     try {
       const fresh = await doSync();
       this.allEntries = fresh;
+      await this.loadLocalNotes();  // V51: 首次启动也加载本地 notes
       this.syncStatus = (await import('./services/sync')).getStatus();
       this.stats = await cacheStats();
       this.status = 'ready';
@@ -214,6 +215,7 @@ export class LlApp extends LitElement {
       }
       // 刷新
       this.allEntries = await (await import('./services/db')).loadManifest();
+      await this.loadLocalNotes();  // V51: 同步本地 📕 / 📘 notes
       this.stats = await (await import('./services/db')).cacheStats();
       // 如果删的就是当前笔记,清空
       if (this.currentNote && this.currentNote.path === path) {
@@ -239,6 +241,7 @@ export class LlApp extends LitElement {
       await renameNote(oldPath, newPath);
       this.noticeMsg = `已重命名 → "${newPath}"`;
       this.allEntries = await (await import('./services/db')).loadManifest();
+      await this.loadLocalNotes();
       // 如果重命名当前笔记,同步更新
       if (this.currentNote && this.currentNote.path === oldPath) {
         this.currentNote = await getNote(newPath);
@@ -275,6 +278,7 @@ export class LlApp extends LitElement {
       await saveManifest([...manifest, { path, size: enc.length, mtime: Date.now(), hash }]);
       this.noticeMsg = `已创建 "${path}"`;
       this.allEntries = await (await import('./services/db')).loadManifest();
+      await this.loadLocalNotes();
       // 自动打开新建的笔记
       setTimeout(() => {
         this.openNote(path);
@@ -554,8 +558,46 @@ export class LlApp extends LitElement {
   }
 
   private get displayEntries(): ManifestEntry[] {
-    if (!this.searchTerm) return this.allEntries;
-    return this.allEntries.filter(x => x.path.toLowerCase().includes(this.searchTerm));
+    // V51: 合并 Dexie notes 里的 📕 / 📘 本地 PDF/EPUB notes (OSS manifest 不会自动包含本地直接写的)
+    const localEntries = this.localNoteEntries;
+    const merged = [...this.allEntries, ...localEntries];
+    if (!this.searchTerm) return merged;
+    return merged.filter(x => x.path.toLowerCase().includes(this.searchTerm));
+  }
+
+  /** 从 Dexie notes 表读所有 📕 / 📘 开头的本地 notes, 缓存到 __localNotesMap */
+  private async loadLocalNotes(): Promise<void> {
+    try {
+      const all = await (await import('./services/db')).loadAllNotes();
+      const map = new Map<string, { content: string; mtime: number; hash: string }>();
+      for (const n of all) {
+        if (!n.path.startsWith('📕') && !n.path.startsWith('📘')) continue;
+        map.set(n.path, { content: n.content, mtime: n.mtime, hash: n.hash });
+      }
+      (this as any).__localNotesMap = map;
+    } catch (e) {
+      console.warn('[main] loadLocalNotes:', e);
+    }
+  }
+
+  /** 从 Dexie notes 表读所有 📕 / 📘 开头的本地 notes, 转成 ManifestEntry 格式注入文件树搜索结果 */
+  private get localNoteEntries(): ManifestEntry[] {
+    const notesMap = (this as any).__localNotesMap as Map<string, { content: string; mtime: number; hash: string }> | undefined;
+    if (!notesMap) return [];
+    const entries: ManifestEntry[] = [];
+    for (const [path, note] of notesMap) {
+      if (!path.startsWith('📕') && !path.startsWith('📘')) continue;
+      entries.push({
+        path,
+        name: path.split('/').pop() || path,
+        mtime: note.mtime,
+        hash: note.hash,
+        // V51: 标记为本地 (synthetic — UI 可选显示 ⭐ 或类似标记)
+        // 这里 type/size 不存在 ManifestEntry 类型里, 用 ext 字段 if present
+        size: note.content.length,
+      } as ManifestEntry);
+    }
+    return entries;
   }
 
   // V29: 点 main 区域关侧栏 (后台点击即关)
