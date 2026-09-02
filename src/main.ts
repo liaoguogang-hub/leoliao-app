@@ -659,7 +659,7 @@ export class LlApp extends LitElement {
             ` : html`<span class="toolbar-title toolbar-title-empty">知识库</span>`}
             <div class="toolbar-actions">
               <!-- V33: 打开本地文件按钮 -->
-              <button class="toolbar-btn" title="打开本地文件(md/html/txt/图片/docx)" @click=${() => this.openLocalFile()} ?disabled=${this.openingFile}>
+              <button class="toolbar-btn" title="打开本地文件(md/html/txt/图片/docx/pdf/epub)" @click=${() => this.openLocalFile()} ?disabled=${this.openingFile}>
                 ${this.openingFile ? '⏳' : '📂'}
               </button>
               <!-- V43: 新建笔记 -->

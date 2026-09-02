@@ -18,6 +18,7 @@ import DOMPurify from 'dompurify';
 import mammoth from 'mammoth';
 import MarkdownIt from 'markdown-it';
 import * as pdfjsLib from 'pdfjs-dist';
+import JSZip from 'jszip';  // V50: EPUB 解析
 // Vite ?url 把 worker 单独打成资源,运行时 fetch
 // @ts-ignore - Vite 虚拟模块
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
@@ -36,6 +37,7 @@ const PICK_TYPES = [
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',   // pptx
   'application/msword',
   'image/*',
+  'application/epub+zip',  // V50: EPUB
 ];
 
 /** 文件元数据 + 内容 + 渲染结果 */
@@ -184,6 +186,8 @@ async function renderBytes(info: { name: string; ext: string; mimeType: string; 
       }
       case 'pdf':
         return await renderPdf(name, ext, mimeType, bytes);
+      case 'epub':
+        return await renderEpub(name, ext, mimeType, bytes);
       case 'ppt':
       case 'pptx':
         return makeFile(
@@ -247,6 +251,7 @@ function guessMime(ext: string): string {
     pdf: 'application/pdf',
     docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    epub: 'application/epub+zip',  // V50: EPUB
   };
   return map[ext] || 'application/octet-stream';
 }
@@ -406,5 +411,162 @@ async function indexLocalPdf(pdf: any, name: string, totalPages: number): Promis
     console.log('[file-opener] PDF 索引完成:', chunks.length, 'chunks');
   } catch (e) {
     console.warn('[file-opener] indexLocalPdf 失败:', e);
+  }
+}
+
+/* === V50: EPUB 入库(轻量渲染 + 后台索引) ===
+ * 不做分章渲染(canvas 在 WebView 渲染 zip 解析开销大),
+ * 只展示"已加入 KB 索引"提示 + 后台解析 OEBPS 抽文字走 chunker
+ */
+async function renderEpub(
+  name: string,
+  ext: string,
+  mimeType: string,
+  bytes: Uint8Array
+): Promise<OpenedFile> {
+  console.log('[file-opener] EPUB 开始解析, size=', bytes.byteLength, 'name=', name);
+  // 后台 fire-and-forget 索引(不阻塞返回,失败只 console.warn)
+  indexLocalEpub(bytes, name).catch(err => {
+    console.warn('[file-opener] EPUB 索引失败:', err);
+  });
+  // 展示提示
+  const tip = `<div class="file-warn" style="background:rgba(80,160,200,0.1);color:#2a7da8">
+    📘 EPUB 已加入 KB 索引<br/>
+    <span style="font-size:13px">不渲染分章(性能考虑),但纯文本已喂 chunker + embedder,<br/>
+    在 chat 里勾"📂 本地文件"或选 📘 前缀路径即可检索。</span>
+  </div>`;
+  return makeFile(name, ext, mimeType, bytes, undefined, tip, 'local', 'EPUB 已索引');
+}
+
+/** V50: 解析 EPUB → 抽所有章节纯文本 → 切 chunk → 写 Dexie
+ *  - path = "📘 xxx.epub"
+ *  - 复用 indexLocalPdf 的 saveChunks + embedder + chunker 管线
+ *  - 章节级容忍:单章失败 warn 跳过;全书失败 catch 不 throw
+ *  - 空文本(图画书 / 加密)console.log 跳过
+ */
+async function indexLocalEpub(bytes: Uint8Array, name: string): Promise<void> {
+  try {
+    const { saveChunks, saveChunkVectors } = await import('./db');
+    const { chunkDocument, chunkHash } = await import('./chunker');
+    const { embedText } = await import('./embedder');
+    const epubId = `📘 ${name}.epub`;
+
+    // 1) JSZip 解 zip
+    const zip = await JSZip.loadAsync(bytes);
+
+    // 2) 读 META-INF/container.xml 找 rootfile
+    const containerXml = await zip.file('META-INF/container.xml')?.async('string');
+    if (!containerXml) {
+      console.warn('[file-opener] EPUB 缺少 META-INF/container.xml, 不是合法 EPUB');
+      return;
+    }
+    const containerDoc = new DOMParser().parseFromString(containerXml, 'application/xml');
+    const rootfileEl = containerDoc.querySelector('rootfile');
+    const opfPath = rootfileEl?.getAttribute('full-path');
+    if (!opfPath) {
+      console.warn('[file-opener] EPUB container.xml 没有 rootfile[full-path]');
+      return;
+    }
+    console.log('[file-opener] EPUB OPF:', opfPath);
+
+    // 3) 读 OPF
+    const opfXml = await zip.file(opfPath)?.async('string');
+    if (!opfXml) {
+      console.warn('[file-opener] EPUB 找不到 OPF:', opfPath);
+      return;
+    }
+    const opfDoc = new DOMParser().parseFromString(opfXml, 'application/xml');
+
+    // 4) 解析 manifest (id → { href, mediaType }) + spine (idref 顺序)
+    const manifest = new Map<string, { href: string; mediaType: string }>();
+    opfDoc.querySelectorAll('manifest > item').forEach(item => {
+      const id = item.getAttribute('id') || '';
+      const href = item.getAttribute('href') || '';
+      const mediaType = item.getAttribute('media-type') || '';
+      if (id && href) manifest.set(id, { href, mediaType });
+    });
+    const spineIds: string[] = [];
+    opfDoc.querySelectorAll('spine > itemref').forEach(ir => {
+      const idref = ir.getAttribute('idref');
+      if (idref) spineIds.push(idref);
+    });
+    console.log('[file-opener] EPUB spine:', spineIds.length, '章');
+
+    // OPF 路径作为 base,resolve 相对路径
+    const opfBase = opfPath.includes('/') ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1) : '';
+
+    // 5) 按 spine 顺序遍历,只取 XHTML/HTML 章节
+    const chapterParts: string[] = [];
+    for (const id of spineIds) {
+      const entry = manifest.get(id);
+      if (!entry) continue;
+      const mime = entry.mediaType.toLowerCase();
+      // 只取 XHTML / HTML(image/css/octet-stream 跳过)
+      if (!/(xhtml|html)$/.test(mime)) continue;
+      // resolve 相对路径(用 POSIX 路径在 zip 里定位)
+      const href = entry.href;
+      const fullPath = href.startsWith('/') ? href.substring(1) : (opfBase + href);
+      // EPUB zip 用 / 路径
+      const zipPath = fullPath.replace(/\\/g, '/');
+      try {
+        const xhtml = await zip.file(zipPath)?.async('string');
+        if (!xhtml) {
+          console.warn('[file-opener] EPUB 章节 zip 读取失败:', zipPath);
+          continue;
+        }
+        // 6) DOMParser 抽纯文本(用 text/html 兼容 XHTML 实体)
+        const xhtmlDoc = new DOMParser().parseFromString(xhtml, 'text/html');
+        const title = xhtmlDoc.querySelector('title')?.textContent?.trim()
+                    || xhtmlDoc.querySelector('h1, h2, h3')?.textContent?.trim()
+                    || entry.href.replace(/\.[xX]?[hH][tT][mM][lL]?$/, '');
+        const body = xhtmlDoc.body;
+        const text = body?.textContent?.trim() || '';
+        if (!text) {
+          console.log('[file-opener] EPUB 章节空文本,跳过:', entry.href);
+          continue;
+        }
+        chapterParts.push(`\n\n## ${title}\n\n${text}`);
+      } catch (chapterErr) {
+        console.warn('[file-opener] EPUB 章节解析失败:', zipPath, chapterErr);
+        // 单章节失败容忍,继续下个
+      }
+    }
+
+    // 7) 拼接全文
+    const fullDoc = chapterParts.join('').trim();
+    if (!fullDoc) {
+      console.log('[file-opener] EPUB 无可提取文字(可能是图画书/加密)');
+      return;
+    }
+    console.log('[file-opener] EPUB 文字提取完成,', fullDoc.length, '字');
+
+    // 8) 删旧 + chunker 切分 + 写 chunks
+    await saveChunks(epubId, []);  // 清旧
+    const chunks = chunkDocument(epubId, fullDoc);
+    const chunkRows = chunks.map(c => ({
+      idx: c.idx,
+      heading: c.heading || 'EPUB',
+      content: c.content,
+      startOffset: c.startOffset,
+      endOffset: c.endOffset,
+      hash: chunkHash(c.content),
+      mtime: Date.now(),
+    }));
+    await saveChunks(epubId, chunkRows);
+
+    // 9) 走 embedder 建向量索引
+    const vecRows = chunks.map(c => {
+      const vec = embedText(c.content);
+      return {
+        idx: c.idx,
+        vec, dim: vec.length,
+        hash: chunkHash(c.content),
+        mtime: Date.now(),
+      };
+    });
+    await saveChunkVectors(epubId, vecRows);
+    console.log('[file-opener] EPUB 索引完成:', chunks.length, 'chunks');
+  } catch (e) {
+    console.warn('[file-opener] indexLocalEpub 失败:', e);
   }
 }

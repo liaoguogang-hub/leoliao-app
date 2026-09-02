@@ -20,3 +20,14 @@ android/app/*.jks
 *.tar.gz
 icons-preview/
 开机欢迎图/
+
+# v1.10 起新增: .devtools 中的一次性截图 / 临时探针不入仓
+.devtools/*.png
+.devtools/verify-p2.mjs
+.devtools/verify-scroll.mjs
+.devtools/verify-copy-final.mjs
+.devtools/cdp-check.mjs
+.devtools/quick-check.mjs
+.devtools/open-and-click.mjs
+.devtools/wiki-check.mjs
+.devtools/wiki-check2.mjs

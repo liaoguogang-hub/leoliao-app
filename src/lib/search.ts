@@ -109,7 +109,7 @@ export async function search(
   // 过滤掉 📕 本地文件路径(除非 includeLocal=true)
   const effectivePaths = includeLocal
     ? paths
-    : paths.filter(p => !p.startsWith('📕'));
+    : paths.filter(p => !p.startsWith('📕') && !p.startsWith('📘'));
   if (mode === 'bm25') return searchBM25(query, k, maxChars, effectivePaths);
   if (mode === 'vector') return searchVector(query, k, maxChars, effectivePaths);
   return searchHybrid(query, k, maxChars, effectivePaths);
