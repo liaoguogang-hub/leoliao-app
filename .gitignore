@@ -33,3 +33,5 @@ icons-preview/
 .devtools/wiki-check2.mjs
 # diag 临时探针不入仓
 .devtools/diag-*.mjs
+public/test.pdf
+# test fixtures in public/ 也不入仓

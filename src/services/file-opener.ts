@@ -21,10 +21,23 @@ import * as pdfjsLib from 'pdfjs-dist';
 import JSZip from 'jszip';  // V50: EPUB 解析
 // Vite ?url 把 worker 单独打成资源,运行时 fetch
 // @ts-ignore - Vite 虚拟模块
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.js?url';
 
-// V42: 配置 PDF.js worker
+// V50.6: PDF.js 4.x worker 路径变了, 改用 ?url 方式; 4.x 默认主线程跑更稳
+// V50.9: webview worker fetch 不稳 — 但 PDF.js 4.x 强制要 workerSrc,不能为空
+// 恢复 workerSrc 指向 Vite 打包后的 worker URL (webview 应该能 fetch localhost)
+// PDF.js 4.x 已知 issue: 必须有 worker,否则 throw
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl as unknown as string;
+
+/** V50.11 debug: webview 直接调 renderPdf(跳过 FilePicker UI) */
+export async function __debugRenderPdf(bytes: Uint8Array, name: string): Promise<OpenedFile> {
+  return renderPdf(name, 'pdf', 'application/pdf', bytes);
+}
+
+// V50.11 debug: 暴露 renderPdf 等给 window 让 webview CDP 直接调用
+(globalThis as any).__leoliaoDebug = {
+  renderPdf: __debugRenderPdf,
+};
 
 /** 打开的文件类型(给 SAF 过滤) */
 const PICK_TYPES = [
@@ -299,10 +312,18 @@ async function renderPdf(
 ): Promise<OpenedFile> {
   try {
     console.log('[file-opener] PDF 开始渲染, size=', bytes.byteLength, 'name=', name);
+    console.log('[file-opener] PDF worker:', (pdfjsLib as any).GlobalWorkerOptions?.workerSrc);
     // PDF.js 要 ArrayBuffer
     const buffer = bytesToArrayBuffer(bytes);
-    const loadingTask = pdfjsLib.getDocument({ data: buffer });
-    const pdf = await loadingTask.promise;
+    // V50.7: useWorkerFetch: false 强制主线程跑
+    const loadingTask = pdfjsLib.getDocument({
+      data: buffer,
+      useWorkerFetch: false,
+      isEvalSupported: true,
+    } as any);
+    loadingTask.onProgress = (p: any) => console.log('[file-opener] PDF load progress:', p.loaded, '/', p.total);
+    // PDF.js 3.x 直接是 thenable (没有 .promise)
+    const pdf: any = await (loadingTask as any).promise || await loadingTask;
     const totalPages = pdf.numPages;
     console.log('[file-opener] PDF 共', totalPages, '页');
 
@@ -316,7 +337,7 @@ async function renderPdf(
       canvas.height = Math.ceil(viewport.height);
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Canvas 2D context 不可用');
-      await page.render({ canvasContext: ctx, viewport, canvas }).promise;
+      await page.render({ canvasContext: ctx, viewport } as any).promise;
       imgs.push(`<div class="pdf-page"><div class="pdf-page-num">第 ${i} / ${totalPages} 页</div><img src="${canvas.toDataURL('image/png')}" alt="第${i}页" /></div>`);
     }
 
@@ -340,6 +361,7 @@ async function renderPdf(
     return file;
   } catch (e: any) {
     console.error('[file-opener] PDF 渲染失败:', e);
+    console.error('[file-opener] PDF error name:', e?.name, 'message:', e?.message, 'stack:', e?.stack?.substring(0, 500));
     return makeFile(
       name, ext, mimeType, bytes, undefined,
       `<div class="file-error">
@@ -370,7 +392,8 @@ async function indexLocalPdf(pdf: any, name: string, totalPages: number): Promis
     const allTextParts: string[] = [];
     for (let i = 1; i <= totalPages; i++) {
       const page = await pdf.getPage(i);
-      const textContent = await page.getPageTextContent();
+      // V50.13: PDF.js 3.x API: getTextContent (不是 6.x 的 getPageTextContent)
+      const textContent = await (page as any).getTextContent();
       const items = textContent.items || [];
       const pageText = items
         .map((it: any) => it.str || '')

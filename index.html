@@ -38,6 +38,32 @@
       addHelper('find', function (fn) { for (const x of this) if (fn(x, this)) return x; });
       addHelper('join', function (sep) { return [...this].join(sep); });
     }
+    // V50.2 polyfill: Promise.withResolvers + Promise.try (ES2024, Chrome 119+)
+    // PDF.js 6.x 内部用 Promise.withResolvers + Promise.try,旧 WebView 没有
+    if (typeof Promise.withResolvers === 'undefined') {
+      Promise.withResolvers = function () {
+        let resolve, reject;
+        const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+        return { promise, resolve, reject };
+      };
+    }
+    if (typeof Promise.try === 'undefined') {
+      // Promise.try(fn) → 把同步函数 / thenable / promise 统一包成已 settle 的 Promise
+      Promise.try = function (fn) {
+        return new Promise((resolve, reject) => {
+          try {
+            const result = fn();
+            if (result && typeof result.then === 'function') {
+              result.then(resolve, reject);
+            } else {
+              resolve(result);
+            }
+          } catch (e) {
+            reject(e);
+          }
+        });
+      };
+    }
   </script>
 </head>
 <body>
