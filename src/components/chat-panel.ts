@@ -23,6 +23,8 @@ import {
 } from '../lib/agent';
 import { loadLLMSettings, saveLLMSettings } from '../services/llm-settings';
 import { loadWebSettings, saveWebSettings } from '../services/web-settings';
+import { loadMemorySettings, saveMemorySettings, type MemorySettings } from '../services/memory-settings';
+import { extractFromConversation } from '../services/memory';
 import {
   getChatHistory, appendChatMessage, clearChatHistory, db,
   listSessions, createSession, renameSession, deleteSession,
@@ -98,6 +100,12 @@ export class LlChatPanel extends LitElement {
   @state() private allDirs: string[] = [];
   /** V45: Agent 启用的工具列表(默认全部启用) */
   @state() private enabledTools: string[] = ['kb_search', 'web_search', 'note_open', 'list_files', 'note_edit'];
+  /** V46: 长期记忆设置 */
+  @state() private memory!: MemorySettings;
+  /** V46: Memory panel 是否打开 */
+  @state() private showMemoryPanel = false;
+  /** V46: 当前记忆主题缓存(用于 panel 显示) */
+  @state() private memoryTopics: Array<{ topic: any; items: any[] }> = [];
   @state() private testStatus: { ok: boolean; msg: string } | null = null;
   @state() private vaultNoteCount = 0;     // vault 已同步笔记数 (Dexie notes.count)
   // V42 多会话
@@ -154,6 +162,7 @@ export class LlChatPanel extends LitElement {
     }
     this.settings = loadLLMSettings();
     this.web = loadWebSettings();
+    this.memory = loadMemorySettings();
     // V1.1.2+: 防御性同步 — 如果 settings.baseUrl / model 跟当前 provider 的默认值不一致
     // （典型 bug：用户从 v1.1.0 升级上来，或用 inject 方式灌了 deepseek 配置后切到 MiniMax），
     // 自动 fallback 到 provider 默认值，避免 baseUrl 还是 deepseek 的域名 + MiniMax key 这种错配。
@@ -478,6 +487,25 @@ export class LlChatPanel extends LitElement {
     await this.persistAssistant(sessionId, fullText, kbCitations, webCitations);
     this.sending = false;        // V42 fix: 成功路径漏了,导致按钮停在"⏹ 停止"
     this.currentAbort = null;
+    // V46: 后台异步触发长期记忆(每轮都跑,慢一点但全自动)
+    if (this.memory.enabled && this.memory.mode === 'every-turn') {
+      this.triggerMemoryExtract(sessionId);
+    }
+  }
+
+  /** V46: 后台提取记忆(不阻塞 UI) */
+  private triggerMemoryExtract(sessionId: string) {
+    // 取最近 6 轮对话
+    const recent = this.messages
+      .filter(m => m.id !== 0 && m.role !== 'system')
+      .slice(-6)
+      .map(m => ({ role: m.role, content: m.content } as ChatMessage));
+    if (recent.length < 2) return;
+    extractFromConversation(recent, this.settings, sessionId)
+      .then(topics => {
+        if (topics.length > 0) console.log('[memory] extracted', topics.length, 'topics');
+      })
+      .catch(e => console.warn('[memory] extract failed', e));
   }
 
   /** V42 helper: 持久化助手消息 + 回填 id */
@@ -506,6 +534,82 @@ export class LlChatPanel extends LitElement {
     this.messages = this.messages.map((m, i) =>
       i === this.messages.length - 1 ? finalAssistant : m
     );
+  }
+
+  /** V46: 打开 memory panel + 加载主题 */
+  private async openMemoryPanel() {
+    const { listMemoryTopics, getMemoryTopicWithItems } = await import('../services/db');
+    const topics = await listMemoryTopics();
+    const out: Array<{ topic: any; items: any[] }> = [];
+    for (const t of topics.slice(0, 30)) {
+      const detail = await getMemoryTopicWithItems(t.id);
+      if (detail) out.push(detail);
+    }
+    this.memoryTopics = out;
+    this.showMemoryPanel = true;
+  }
+
+  /** V46: 删除记忆主题 */
+  private async deleteMemoryTopic(id: string) {
+    if (!confirm('删除该记忆主题?')) return;
+    const { deleteMemoryTopic } = await import('../services/db');
+    await deleteMemoryTopic(id);
+    this.memoryTopics = this.memoryTopics.filter(t => t.topic.id !== id);
+  }
+
+  /** V46: 导出记忆为 Markdown */
+  private async exportMemory() {
+    const { exportMemoryMarkdown } = await import('../services/memory');
+    const md = await exportMemoryMarkdown();
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `leoliao-memory-${new Date().toISOString().slice(0, 10)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+    console.log('[memory] exported to', a.download);
+  }
+
+  /** V46: 渲染 memory panel */
+  private renderMemoryPanel() {
+    if (!this.showMemoryPanel) return null;
+    return html`
+      <div class="modal-overlay" @click=${(e: MouseEvent) => {
+        if (e.target === e.currentTarget) this.showMemoryPanel = false;
+      }}>
+        <div class="modal-box" style="max-width:600px">
+          <h2>💭 长期记忆</h2>
+          <p class="modal-sub">${this.memoryTopics.length} 个主题 · 自动从对话提取</p>
+          <div style="max-height:400px;overflow-y:auto">
+            ${this.memoryTopics.length === 0 ? html`
+              <div class="path-picker-empty">还没有记忆主题。发几条对话后会自动提取(需要在设置中开启)。</div>
+            ` : this.memoryTopics.map(({ topic, items }) => html`
+              <details class="memory-topic">
+                <summary>
+                  <span style="font-weight:500">${topic.title}</span>
+                  <span class="memory-topic-meta">${items.length} 条 · ${new Date(topic.lastUsed).toLocaleDateString('zh-CN')}</span>
+                </summary>
+                <div class="memory-topic-body">
+                  ${topic.summary ? html`<p class="memory-topic-summary">${topic.summary}</p>` : nothing}
+                  ${items.map((it: any) => html`
+                    <div class="memory-item">
+                      <span class="memory-item-kind ${it.kind}">${it.kind === 'fact' ? '📌' : it.kind === 'pref' ? '⭐' : '💬'}</span>
+                      <span>${it.content}</span>
+                    </div>
+                  `)}
+                  <button class="btn-delete-topic" @click=${() => this.deleteMemoryTopic(topic.id)}>🗑 删除主题</button>
+                </div>
+              </details>
+            `)}
+          </div>
+          <div class="modal-actions">
+            <button class="modal-btn" @click=${() => this.showMemoryPanel = false}>关闭</button>
+            <button class="modal-btn primary" @click=${() => this.exportMemory()}>📥 导出 Markdown</button>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   /** V45: Agent ReAct 主循环 — 最多 5 步工具调用 */
@@ -790,6 +894,28 @@ export class LlChatPanel extends LitElement {
           Agent 模式启用时,LLM 可调用工具(最多 5 步)。建议至少留 kb_search。
         </div>
       ` : nothing}
+
+      <fieldset style="margin-top:12px;padding-top:8px;border-top:1px solid var(--border)">
+        <legend style="font-size:12px;color:var(--dim);padding:0 8px">💭 长期记忆 (V46)</legend>
+        <div class="setting-row">
+          <label class="checkbox-label">
+            <input type="checkbox" ?checked=${this.memory.enabled}
+              @change=${(e: Event) => { this.memory = { ...this.memory, enabled: (e.target as HTMLInputElement).checked }; saveMemorySettings(this.memory); }} />
+            自动提取用户偏好/事实
+          </label>
+        </div>
+        <div class="setting-row">
+          <label class="checkbox-label">
+            <input type="checkbox" ?checked=${this.memory.injectInPrompt}
+              @change=${(e: Event) => { this.memory = { ...this.memory, injectInPrompt: (e.target as HTMLInputElement).checked }; saveMemorySettings(this.memory); }} />
+            注入到 system prompt
+          </label>
+        </div>
+        <div class="setting-row">
+          <button class="modal-btn" @click=${() => this.openMemoryPanel()}>📚 查看记忆主题</button>
+          <button class="modal-btn" @click=${() => this.exportMemory()}>📥 导出 Markdown</button>
+        </div>
+      </fieldset>
     `;
   }
 
@@ -1041,6 +1167,7 @@ export class LlChatPanel extends LitElement {
         <button class="chat-fab" title="AI 对话" @click=${() => { this.open = true; }}>💬</button>
       `}
       ${this.showPathPicker ? this.renderPathPicker() : nothing}
+      ${this.showMemoryPanel ? this.renderMemoryPanel() : nothing}
     `;
   }
 

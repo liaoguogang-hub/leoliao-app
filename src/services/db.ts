@@ -45,6 +45,9 @@ class LeoLiaoDB extends Dexie {
   chatSessions!: Table<ChatSessionRow, string>;
   /** V44: 文档 chunks(主键 [path+idx]) */
   chunks!: Table<ChunkRow, [string, number]>;
+  /** V46: 长期记忆 — 主题(items 是 sub-items) */
+  memoryTopics!: Table<MemoryTopicRow, string>;
+  memoryItems!: Table<MemoryItemRow, number>;
 
   constructor() {
     super('leoliao');
@@ -92,6 +95,18 @@ class LeoLiaoDB extends Dexie {
       chatSessions: 'id, updatedAt',
       chunks: '[path+idx], path',
     });
+    // V46: memory — memoryTopics + memoryItems
+    this.version(7).stores({
+      manifest: 'path, mtime, hash',
+      notes: 'path, mtime, cachedAt',
+      welcome: 'name, hash',
+      history: 'id, type, openedAt',
+      chat: '++id, ts, sessionId',
+      chatSessions: 'id, updatedAt',
+      chunks: '[path+idx], path',
+      memoryTopics: 'id, createdAt, lastUsed',
+      memoryItems: '++id, topicId, ts',
+    });
   }
 }
 
@@ -126,6 +141,30 @@ export interface ChunkRow {
   endOffset: number;
   hash: string;             // chunkHash(content)
   mtime: number;            // 笔记 mtime(级联用)
+}
+
+/** V46: 记忆主题(主键 id = uuid) */
+export interface MemoryTopicRow {
+  id: string;               // 主键(uuid)
+  title: string;            // 主题标题(从对话摘要)
+  summary: string;          // 一段简短描述(用户偏好/事实)
+  createdAt: number;        // 首次发现时间
+  lastUsed: number;         // 最近引用时间(用于排序/淘汰)
+  /** 关联的会话 id(谁产生的) */
+  sessionId?: string;
+  /** 状态:active / archived / deleted */
+  status: 'active' | 'archived';
+}
+
+/** V46: 记忆条目 — 主题下的具体事实/片段 */
+export interface MemoryItemRow {
+  id?: number;              // ++id
+  topicId: string;          // 关联 memoryTopics.id
+  /** 条目类型:fact(事实)/quote(引用)/pref(用户偏好) */
+  kind: 'fact' | 'quote' | 'pref';
+  content: string;          // 条目内容
+  source?: string;          // 来源路径(笔记或会话 id)
+  ts: number;               // 时间戳
 }
 
 let _db: LeoLiaoDB | null = null;
@@ -202,6 +241,68 @@ export async function loadAllChunks(): Promise<ChunkRow[]> {
 /** 删某 path 下的所有 chunks(notes 改名/删除时级联) */
 export async function deleteChunksForNote(path: string): Promise<void> {
   await db().chunks.where('path').equals(path).delete();
+}
+
+/* === V46: Memory CRUD === */
+
+/** 列所有 active 主题(按 lastUsed 倒序) */
+export async function listMemoryTopics(): Promise<MemoryTopicRow[]> {
+  const rows = await db().memoryTopics.toArray();
+  return rows
+    .filter(t => t.status === 'active')
+    .sort((a, b) => b.lastUsed - a.lastUsed);
+}
+
+/** 取某主题 + 它所有 items */
+export async function getMemoryTopicWithItems(id: string): Promise<{ topic: MemoryTopicRow; items: MemoryItemRow[] } | null> {
+  const topic = await db().memoryTopics.get(id);
+  if (!topic) return null;
+  const items = await db().memoryItems.where('topicId').equals(id).toArray();
+  items.sort((a, b) => a.ts - b.ts);
+  return { topic, items };
+}
+
+/** 创建主题 + 批量添加 items */
+export async function createMemoryTopic(
+  title: string,
+  summary: string,
+  items: Array<Omit<MemoryItemRow, 'id' | 'topicId' | 'ts'>>,
+  sessionId?: string
+): Promise<MemoryTopicRow> {
+  const id = newSessionId();    // 复用 V42 的 uuid 函数
+  const now = Date.now();
+  const topic: MemoryTopicRow = {
+    id, title: title.trim().slice(0, 80), summary: summary.trim().slice(0, 500),
+    createdAt: now, lastUsed: now, sessionId, status: 'active',
+  };
+  await db().memoryTopics.put(topic);
+  if (items.length > 0) {
+    const rows: MemoryItemRow[] = items.map(it => ({
+      topicId: id, kind: it.kind || 'fact', content: it.content,
+      source: it.source, ts: now,
+    }));
+    await db().memoryItems.bulkAdd(rows);
+  }
+  return topic;
+}
+
+/** 删除主题(级联 items) */
+export async function deleteMemoryTopic(id: string): Promise<void> {
+  await db().memoryItems.where('topicId').equals(id).delete();
+  await db().memoryTopics.delete(id);
+}
+
+/** 触摸主题 lastUsed(被新对话引用时) */
+export async function touchMemoryTopic(id: string): Promise<void> {
+  const t = await db().memoryTopics.get(id);
+  if (t) await db().memoryTopics.put({ ...t, lastUsed: Date.now() });
+}
+
+/** 列出所有 items 用于导出 */
+export async function exportAllMemory(): Promise<{ topics: MemoryTopicRow[]; items: MemoryItemRow[] }> {
+  const topics = await db().memoryTopics.toArray();
+  const items = await db().memoryItems.toArray();
+  return { topics, items };
 }
 
 /** V43: 重命名/移动笔记(改 path + 同时更新 manifest)

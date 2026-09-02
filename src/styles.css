@@ -2065,6 +2065,68 @@ ll-app {
   50% { opacity: 0.7; }
 }
 
+/* === V46: 长期记忆面板 === */
+.memory-topic {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: var(--bg);
+}
+.memory-topic > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  user-select: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.memory-topic > summary:hover {
+  background: var(--border);
+}
+.memory-topic-meta {
+  font-size: 10px;
+  color: var(--dim);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+.memory-topic-body {
+  padding: 0 12px 12px;
+  border-top: 1px solid var(--border);
+}
+.memory-topic-summary {
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--dim);
+  font-style: italic;
+  line-height: 1.4;
+}
+.memory-item {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 4px 0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.memory-item-kind {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  flex-shrink: 0;
+}
+.btn-delete-topic {
+  margin-top: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--dim);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.btn-delete-topic:hover {
+  border-color: #d05050;
+  color: #d05050;
+}
+
 /* === V45: Agent 步骤显示 + 工具配置 === */
 .agent-steps {
   margin-top: 8px;
