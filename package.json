@@ -1,7 +1,7 @@
 {
     "name":  "leoliao-app",
-    "version":  "1.10.0",
-    "description":  "鐭ヨ瘑搴?Android APP",
+    "version":  "1.10.1",
+    "description":  "閻儴鐦戞惔?Android APP",
     "type":  "module",
     "scripts":  {
                     "dev":  "vite",
