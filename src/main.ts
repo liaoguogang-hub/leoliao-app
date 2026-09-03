@@ -418,6 +418,15 @@ export class LlApp extends LitElement {
           bytes: snapshot,
           mimeType: file.mimeType,
         }).catch((e) => console.warn('[history] addLocal:', e));
+
+        // V52: 等 PDF/EPUB 后台索引完成 → 刷新文件树本地 notes 缓存,
+        // 让搜索框能立刻搜到刚生成的 📕/📘 xxx.md(不用等 sync/重启)
+        // 非 PDF/EPUB 文件 indexingDone 不存在,跳过即可
+        if ((file as any).indexingDone) {
+          (file as any).indexingDone
+            .then(() => this.loadLocalNotes())
+            .catch((err: any) => console.warn('[openLocalFile] indexingDone:', err));
+        }
       }
     } catch (e: any) {
       this.errorMsg = `打开文件失败: ${e?.message || e}`;

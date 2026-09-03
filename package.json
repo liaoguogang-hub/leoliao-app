@@ -1,7 +1,7 @@
 {
     "name":  "leoliao-app",
-    "version":  "1.11.1",
-    "description":  "闂傚倷鐒﹀鍧楀储瑜版帒纾块柟缁㈠枟閸庡﹪鏌熺€电浠﹂柛?Android APP",
+    "version":  "1.11.2",
+    "description":  "闂傚倸鍊烽悞锕€顪冮崸妤€鍌ㄧ憸鐗堝笒绾惧潡鏌熺紒銏犳灍闁稿骸锕弻鐔衡偓鐢殿焾娴狅箓鏌?Android APP",
     "type":  "module",
     "scripts":  {
                     "dev":  "vite",

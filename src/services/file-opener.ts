@@ -69,6 +69,12 @@ export interface OpenedFile {
   warning?: string;
   /** 来源标记:本地文件 */
   source: 'local';
+  /** V52: PDF/EPUB 后台索引完成的 promise;非 PDF/EPUB 文件不设。
+   *  - main.ts openLocalFile 等此 promise resolve 后调 loadLocalNotes(),
+   *    让文件树搜索框能立即搜到刚生成的 📕/📘 xxx.md(不用重启/sync)
+   *  - 内部已 catch 错误,调用方再 .catch 是 no-op 安全
+   */
+  indexingDone?: Promise<void>;
 }
 
 /**
@@ -354,7 +360,9 @@ async function renderPdf(
     );
 
     // V49: 异步后台提取文字 + 切分 + 写 Dexie(让本地 PDF 可检索)
-    indexLocalPdf(pdf, name, totalPages).catch(err => {
+    // V52: 把 indexing promise 挂到 file.indexingDone,主线程 openLocalFile
+    // 会在它 resolve 后调 loadLocalNotes(),让文件树搜索框能搜到 📕 xxx.pdf.md
+    file.indexingDone = indexLocalPdf(pdf, name, totalPages).catch(err => {
       console.warn('[file-opener] PDF 文字提取失败:', err);
     });
 
@@ -463,17 +471,20 @@ async function renderEpub(
   bytes: Uint8Array
 ): Promise<OpenedFile> {
   console.log('[file-opener] EPUB 开始解析, size=', bytes.byteLength, 'name=', name);
-  // 后台 fire-and-forget 索引(不阻塞返回,失败只 console.warn)
-  indexLocalEpub(bytes, name).catch(err => {
-    console.warn('[file-opener] EPUB 索引失败:', err);
-  });
+  // V52: 把 indexing promise 挂到 file.indexingDone,主线程 openLocalFile
+  // 会在它 resolve 后调 loadLocalNotes(),让文件树搜索框能搜到 📘 xxx.epub.md
   // 展示提示
   const tip = `<div class="file-warn" style="background:rgba(80,160,200,0.1);color:#2a7da8">
     📘 EPUB 已加入 KB 索引<br/>
     <span style="font-size:13px">不渲染分章(性能考虑),但纯文本已喂 chunker + embedder,<br/>
     在 chat 里勾"📂 本地文件"或选 📘 前缀路径即可检索。</span>
   </div>`;
-  return makeFile(name, ext, mimeType, bytes, undefined, tip, 'local', 'EPUB 已索引');
+  const file = makeFile(name, ext, mimeType, bytes, undefined, tip, 'local', 'EPUB 已索引');
+  // 后台 fire-and-forget 索引(不阻塞返回,失败只 console.warn)
+  file.indexingDone = indexLocalEpub(bytes, name).catch(err => {
+    console.warn('[file-opener] EPUB 索引失败:', err);
+  });
+  return file;
 }
 
 /** V50: 解析 EPUB → 抽所有章节纯文本 → 切 chunk → 写 Dexie
