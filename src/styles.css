@@ -801,24 +801,37 @@ ll-app {
 .toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 10px 16px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 5;
+  gap: 8px;
+  /* V52.3: 整个 toolbar 横向可滚 — 子元素滚动在 Android WebView 不响应,
+   * 改成 toolbar 自身滚。title 和 buttons 一起滑出左侧。 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  touch-action: pan-x;
+}
+.toolbar::-webkit-scrollbar {
+  display: none;
 }
 
 .toolbar-title {
   font-size: 14px;
   font-weight: 500;
   color: var(--accent);
-  flex: 1;
+  flex: 0 0 auto;       /* V52.3: 不缩,title 跟 toolbar 一起滑出 */
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-right: 12px;
+  margin-right: 0;
+  max-width: 180px;    /* title 占位上限,留空间给 buttons */
 }
 .toolbar-title-empty {
   color: var(--dim);
@@ -828,8 +841,8 @@ ll-app {
 .toolbar-actions {
   display: flex;
   gap: 4px;
+  flex: 0 0 auto;      /* V52.3: 不缩,buttons 全部展示,需要时可横向滑出 */
 }
-
 .toolbar-btn {
   background: transparent;
   border: 1px solid var(--border);
@@ -844,6 +857,27 @@ ll-app {
   justify-content: center;
   font-family: inherit;
   transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
+}
+
+/* V52.3: 本地参考库 — 长文件名改横向滚动展示,不被 ellipsis 截断 */
+.local-file-name {
+  display: inline-block;    /* V52.3: 显式 block 容器,inline <span> 忽略 overflow-x */
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow-x: scroll;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  touch-action: pan-x;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  vertical-align: middle;
+}
+.local-file-name::-webkit-scrollbar {
+  display: none;
 }
 
 .toolbar-btn:hover,
@@ -935,6 +969,22 @@ ll-app {
   padding: 16px;
 }
 
+/* V52.3: local-files-panel 用的是 .modal-backdrop 而非 .modal-overlay,
+ * 之前没 CSS 导致 panel 渲染错位(平铺在主内容底部而不是浮层)。
+ * 复用 .modal-overlay 的样式 */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+  /* V52.4: 顶层允许垂直 pan(允许点空白处关闭),把横向 pan 下传 .local-file-name */
+  touch-action: pan-y;
+}
+
 .modal {
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -990,6 +1040,9 @@ ll-app {
   padding: 16px 18px;
   overflow-y: auto;
   flex: 1;
+  /* V52.4: modal 自身的 overflow-y:auto 在 WebView 会吞横向 pan 事件,
+   * 设 touch-action:pan-y 让浏览器只接管垂直 pan,横向 pan 留给 .local-file-name */
+  touch-action: pan-y;
 }
 
 .setting-section {

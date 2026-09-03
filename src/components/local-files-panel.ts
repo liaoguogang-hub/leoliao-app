@@ -112,7 +112,7 @@ export class LlLocalFilesPanel extends LitElement {
       <div class="modal-backdrop" @click=${(e: Event) => {
         if (e.target === e.currentTarget) this.close();
       }}>
-        <div class="modal-panel" style="max-width:720px;max-height:80vh;overflow:auto;">
+        <div class="modal-panel" style="max-width:720px;max-height:80vh;overflow:auto;touch-action:pan-y;">
           <div class="modal-header">
             <h2>📚 本地参考库</h2>
             <button class="close-btn" @click=${() => this.close()}>✕</button>
@@ -124,12 +124,18 @@ export class LlLocalFilesPanel extends LitElement {
                 `已索引 ${this.files.length} 个本地文件 (PDF / EPUB),检索时勾"📂 包含本地文件"即可召回。`}
             </p>
             ${this.files.map(f => html`
-              <div class="local-file-card" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;background:var(--card-bg);">
-                <div style="display:flex;align-items:center;gap:8px;cursor:pointer" @click=${() => this.toggle(f.path)}>
-                  <span style="font-size:18px">${this.expanded.has(f.path) ? '▼' : '▶'}</span>
-                  <span style="font-weight:600">${this.typeBadge(f.type)}</span>
-                  <span style="flex:1;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${f.path.replace(/^[📕📘] /, '').replace(/\.(pdf|epub)$/, '')}</span>
-                  <span style="font-size:11px;color:var(--dim)">${f.chunkCount} chunks · ${f.totalChars.toLocaleString()} 字</span>
+              <div class="local-file-card" style="border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;background:var(--card-bg);touch-action:pan-x;">
+                <div style="cursor:pointer;touch-action:pan-x" @click=${() => this.toggle(f.path)}>
+                  <!-- V52.3: 顶部行 — 文件名占主导,可横向滑动 -->
+                  <div style="display:flex;align-items:center;gap:8px;touch-action:pan-x">
+                    <span style="font-size:18px;flex-shrink:0">${this.expanded.has(f.path) ? '▼' : '▶'}</span>
+                    <span style="font-weight:600;flex-shrink:0">${this.typeBadge(f.type)}</span>
+                    <span class="local-file-name">${f.path.replace(/^[📕📘] /, '').replace(/\.(pdf|epub)$/, '')}</span>
+                  </div>
+                  <!-- V52.3: 底部行 — chunks/字数,小字暗色 -->
+                  <div style="font-size:11px;color:var(--dim);margin-top:4px;margin-left:24px">
+                    ${f.chunkCount} chunks · ${f.totalChars.toLocaleString()} 字
+                  </div>
                 </div>
                 <div style="font-size:11px;color:var(--dim);margin-top:4px;margin-left:24px">
                   最近索引:${this.fmtTime(f.lastIndexed)}
