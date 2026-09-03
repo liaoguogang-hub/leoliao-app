@@ -41,6 +41,8 @@ scripts/probe-scrollleft.mjs
 scripts/probe-toolbar.mjs
 scripts/probe-touch.mjs
 scripts/cdp-swipe.mjs
+# v1.11.4: 排查 PDF mojibake 时一次性 probe 脚本不入仓
+scripts/probe-note-content.mjs
 # v1.11.3: 真机 swipe 测试截图不入仓
 test-results/
 # test fixtures in public/ 也不入仓
