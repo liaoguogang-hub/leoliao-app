@@ -178,23 +178,25 @@ export class LlNoteView extends LitElement {
 
     return html`
       <article class="note ${this.editing ? 'editing' : ''}">
+        <!-- V52.9: 编辑/保存/取消按钮从 note-header 右上角 absolute → 移到 note 顶部作为独立 sticky 行
+             (top:56px 正好在 .toolbar 下方),跟 toolbar 风格统一 -->
+        <div class="note-actions">
+          ${this.editing ? html`
+            <button class="note-btn cancel" @click=${() => this.cancelEdit()}>取消</button>
+            <button class="note-btn save primary"
+              ?disabled=${this.saveStatus === false}
+              @click=${() => this.saveEdit()}>
+              ${this.saveStatus === false ? '保存中…' : isDirty ? '💾 保存' : '已保存'}
+            </button>
+          ` : html`
+            <button class="note-btn edit" @click=${() => this.enterEdit()}>✏️ 编辑</button>
+          `}
+        </div>
         <header class="note-header">
           <h1 class="note-title">${this.titleFromPath(this.note.path)}</h1>
           <div class="note-meta">
             <span class="path">📂 ${this.note.path}</span>
             <span class="size">${(this.note.content.length / 1024).toFixed(1)} KB</span>
-          </div>
-          <div class="note-actions">
-            ${this.editing ? html`
-              <button class="note-btn cancel" @click=${() => this.cancelEdit()}>取消</button>
-              <button class="note-btn save primary"
-                ?disabled=${this.saveStatus === false}
-                @click=${() => this.saveEdit()}>
-                ${this.saveStatus === false ? '保存中…' : isDirty ? '💾 保存' : '已保存'}
-              </button>
-            ` : html`
-              <button class="note-btn edit" @click=${() => this.enterEdit()}>✏️ 编辑</button>
-            `}
           </div>
         </header>
 

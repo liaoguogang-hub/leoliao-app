@@ -430,14 +430,25 @@ ll-app {
   word-break: break-word;
 }
 
-/* V43: 编辑/保存/取消按钮 */
+/* V43 → V52.9: 编辑/保存/取消按钮 — 从 .note-header 右上角 absolute 改为 .note 顶部独立 sticky 行
+ * top: 56px 正好在 .toolbar (padding 10+10+36 高 ≈ 56) 下方
+ * 风格跟 .toolbar 一致:bg-2 + border-bottom,横向可滚避免窄屏溢出 */
 .note-actions {
-  position: absolute;
-  top: 0;
-  right: 16px;
+  position: sticky;
+  top: 56px;
+  z-index: 4;
   display: flex;
   gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 8px 16px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--border);
+  margin: 0 -20px 16px;   /* 跟 .note padding 对齐,把 bg 拉到边缘 */
+  overflow-x: auto;
+  scrollbar-width: none;
 }
+.note-actions::-webkit-scrollbar { display: none; }
 .note-btn {
   padding: 5px 12px;
   background: transparent;
