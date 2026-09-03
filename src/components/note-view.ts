@@ -22,25 +22,23 @@ const localMd = new MarkdownIt({
 export class LlNoteView extends LitElement {
   protected createRenderRoot() { return this; }
 
-  /** V52.10: 用户在阅读模式下的 viewport 中心元素(在 main scroll 时实时更新)
-   *  进入编辑模式时,根据这个元素在 textarea 内设置光标位置(而非末尾) */
-  @state() private lastReadAnchor: HTMLElement | null = null;
+  /** V52.11: 阅读模式滚动位置比例 (article 内已经看的比例 0-1)
+   *  scrollRatio = (mainScrollTop + viewportHalf - articleTop) / articleScrollHeight
+   *  进入编辑时按此比例设置 selectionStart + textarea scrollTop(不估算字符位置) */
+  @state() private readRatio = 0;
   private scrollHandler = () => {
     if (this.editing) return;       // 编辑模式不跟踪
     const main = document.querySelector('.main') as HTMLElement | null;
     if (!main) return;
-    // 找到 viewport 中心点对应的 article 内元素
     const article = this.querySelector('article.note') as HTMLElement | null;
     if (!article) return;
+    // viewport 中点 = mainScrollTop + mainHeight/2
     const viewportMid = main.scrollTop + main.clientHeight / 2;
     const articleTop = article.offsetTop;
-    const candidates = article.querySelectorAll('h1, h2, h3, p, li, blockquote, pre, code, table, img');
-    let target: HTMLElement | null = null;
-    for (const el of Array.from(candidates) as HTMLElement[]) {
-      if ((el as HTMLElement).offsetTop + articleTop <= viewportMid) target = el as HTMLElement;
-      else break;
-    }
-    this.lastReadAnchor = target;
+    // article 起始在 viewportMid 之前多少像素(已经看过的内容)
+    const readPx = Math.max(0, viewportMid - articleTop);
+    const articleH = Math.max(1, article.scrollHeight);
+    this.readRatio = Math.min(1, Math.max(0, readPx / articleH));
   };
 
   connectedCallback() {
@@ -57,8 +55,8 @@ export class LlNoteView extends LitElement {
   updated(changed: Map<string, unknown>) {
     if (changed.has('note') && this.note && !this.editing) {
       this.loadBackLinks(this.note.path);
-      // V52.10: 新笔记加载后重置阅读锚点,等用户滚动再记录
-      this.lastReadAnchor = null;
+      // V52.11: 新笔记加载后重置阅读比例,等用户滚动再记录
+      this.readRatio = 0;
     }
   }
 
@@ -93,40 +91,28 @@ export class LlNoteView extends LitElement {
     }
   }
 
-  /** V43 → V52.10: 进入编辑模式,光标停在用户阅读位置对应行(不再是末尾) */
+  /** V43 → V52.11: 进入编辑模式,光标按阅读比例停在对应位置(不估算字符) */
   private enterEdit() {
     if (!this.note) return;
     this.draft = this.note.content;
-    // V52.10: 在 editing=true 渲染前快照 lastReadAnchor 的 textContent + offsetTop
-    // (渲染后 article 被替换,anchor 会失效)
-    const anchorText = this.lastReadAnchor?.textContent?.trim().slice(0, 60) || '';
-    const anchorTopInArticle = this.lastReadAnchor
-      ? (this.lastReadAnchor as HTMLElement).offsetTop
-      : -1;
+    // V52.11: 快照阅读比例(readRatio 是 number,article 渲染替换不影响)
+    const ratio = Math.min(1, Math.max(0, this.readRatio));
     this.editing = true;
     this.saveStatus = undefined;
     this.updateComplete.then(() => {
       const ta = this.querySelector('.note-editor-textarea') as HTMLTextAreaElement | null;
       if (!ta) return;
       ta.focus();
-      // 1) 估算 draft 里的字符位置: 用 anchor 文本前的内容长度(用 textContent 估算)
-      let pos = ta.value.length;
-      if (anchorText) {
-        const idx = ta.value.indexOf(anchorText);
-        if (idx >= 0) pos = idx + anchorText.length;   // 跳到 anchor 末尾
-        else {
-          // 找不到完整 anchor(可能跨元素/markdown 标记干扰),用比例法 fallback
-          const ratio = anchorTopInArticle > 0
-            ? Math.min(1, anchorTopInArticle / Math.max(1, (this.note?.content.length || 1) * 0.5))
-            : 0;
-          pos = Math.floor(ta.value.length * ratio);
-        }
-      }
-      // 2) 设光标 + 滚动 textarea 让该位置可见
+      const len = ta.value.length;
+      // 1) 光标位置 = 字符长度 × 阅读比例(纯比例,不估算)
+      const pos = Math.floor(len * ratio);
       ta.setSelectionRange(pos, pos);
-      // 估算 scrollTop:每行 ~22px,字符/行 约 40
-      const linesBefore = ta.value.substring(0, pos).split('\n').length;
-      ta.scrollTop = Math.max(0, (linesBefore - 5) * 22);
+      // 2) textarea scrollTop 按比例同步,让该行可见
+      // 等渲染稳定(scrollHeight 已稳定)再设
+      requestAnimationFrame(() => {
+        const maxScroll = Math.max(0, ta.scrollHeight - ta.clientHeight);
+        ta.scrollTop = maxScroll * ratio;
+      });
     });
   }
 
