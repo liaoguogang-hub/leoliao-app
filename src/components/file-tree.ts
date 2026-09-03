@@ -138,13 +138,27 @@ export class LlFileTree extends LitElement {
     }
   }
 
+  /** V52.7: 计算菜单位置 — 长按在屏幕右半时向左展开,在 viewport 内不溢出 */
+  private computeMenuPos(clientX: number, clientY: number): { x: number; y: number } {
+    const W = window.innerWidth, H = window.innerHeight;
+    // ctx-menu 估计宽高: head 240px + 4 个按钮 ~ 200px,实际撑开按内容算 240x220
+    const MENU_W = 240, MENU_H = 220;
+    // 屏幕右半 → 菜单向左展开 (x = clientX - MENU_W)
+    // 屏幕左半 → 菜单向右展开 (x = clientX)
+    const x = clientX > W / 2
+      ? Math.max(8, clientX - MENU_W)
+      : Math.min(W - MENU_W - 8, clientX);
+    const y = Math.max(8, Math.min(H - MENU_H - 8, clientY));
+    return { x, y };
+  }
+
   /** V43: 长按 / 右键触发节点操作菜单 */
   private onContextMenu(e: MouseEvent, node: TreeNode) {
     e.preventDefault();
     e.stopPropagation();
+    const pos = this.computeMenuPos(e.clientX, e.clientY);
     this.ctxMenu = {
-      x: Math.min(e.clientX, window.innerWidth - 160),
-      y: Math.min(e.clientY, window.innerHeight - 180),
+      ...pos,
       path: node.path,
       isDir: node.isDir,
       name: node.name,
@@ -158,9 +172,9 @@ export class LlFileTree extends LitElement {
     const startX = touch.clientX;
     const startY = touch.clientY;
     const timer = setTimeout(() => {
+      const pos = this.computeMenuPos(startX, startY);
       this.ctxMenu = {
-        x: Math.min(startX, window.innerWidth - 160),
-        y: Math.min(startY, window.innerHeight - 180),
+        ...pos,
         path: node.path,
         isDir: node.isDir,
         name: node.name,

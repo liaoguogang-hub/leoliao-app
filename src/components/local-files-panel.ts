@@ -6,6 +6,7 @@
  *
  * - 每个条目:文件名 + 类型(PDF / EPUB)+ chunks 数 + 总字数 + 最近索引时间
  * - 点击展开:显示 chunk 摘要(前 3 个 chunk 的 heading + 预览)
+ * - V52.7: 展开后底部加 🗑 删除按钮 — 删 IndexedDB 里的 chunks + vectors + notes + manifest
  */
 
 import { LitElement, html } from 'lit';
@@ -89,6 +90,40 @@ export class LlLocalFilesPanel extends LitElement {
     this.dispatchEvent(new CustomEvent('close', { bubbles: true, composed: true }));
   }
 
+  /** V52.7: 弹 native confirm 让用户确认删除(防止误删) */
+  private async confirmDelete(e: Event, f: LocalFileSummary) {
+    e.stopPropagation();
+    const ok = window.confirm(
+      `确认删除"${f.path.replace(/^[📕📘] /, '')}"的索引?\n\n` +
+      `将从知识库删除:\n` +
+      `  • ${f.chunkCount} 个 chunks\n` +
+      `  • ${f.totalChars.toLocaleString()} 字内容\n` +
+      `  • 对应 vault md (📕/📘 xxx.md)\n\n` +
+      `原始 PDF/EPUB 文件不会被删除。`,
+    );
+    if (!ok) return;
+    await this.doDelete(f);
+  }
+
+  /** V52.7: 执行删除 — Dexie 清 4 张表,reload 列表 */
+  private async doDelete(f: LocalFileSummary) {
+    try {
+      const { deleteChunksForNote, deleteChunkVectorsForNote, deleteNote, deleteManifestEntry } = await import('../services/db');
+      // chunks / vectors 的 path 是 "📕 xxx.pdf"(无 .md),notes / manifest 是 "📕 xxx.pdf.md"
+      await deleteChunksForNote(f.path);
+      await deleteChunkVectorsForNote(f.path);
+      await deleteNote(`${f.path}.md`);
+      await deleteManifestEntry(`${f.path}.md`);
+      console.log('[local-files-panel] 删除索引:', f.path);
+      // 触发 sync 删 OSS md: 把空 manifest entries 推回去 (这里暂时只清本地,
+      // OSS 上的 md 等下次 gen_oss_manifest 扫描时不在本地就不会列进去)
+      await this.load();
+    } catch (err) {
+      console.error('[local-files-panel] 删除失败:', err);
+      window.alert('删除失败: ' + (err as Error).message);
+    }
+  }
+
   private toggle(path: string) {
     const next = new Set(this.expanded);
     if (next.has(path)) next.delete(path);
@@ -147,6 +182,14 @@ export class LlLocalFilesPanel extends LitElement {
                       f.sampleHeadings.map(h => html`<div style="padding:2px 0">• ${h}</div>`)}
                     <div style="margin-top:8px;color:var(--dim);font-size:11px">
                       💡 vault 中对应 md:<code style="font-size:11px">${f.path}.md</code>
+                    </div>
+                    <!-- V52.7: 删除索引按钮 — 清 IndexedDB 的 chunks + vectors + notes + manifest -->
+                    <div style="margin-top:10px">
+                      <button
+                        data-path=${f.path}
+                        style="background:rgba(220,80,80,0.12);color:#d05050;border:1px solid rgba(220,80,80,0.3);border-radius:6px;padding:6px 12px;font-size:12px;font-family:inherit;cursor:pointer"
+                        @click=${(e: Event) => this.confirmDelete(e, f)}
+                      >🗑 删除索引</button>
                     </div>
                   </div>
                 ` : ''}
