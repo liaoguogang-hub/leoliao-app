@@ -22,10 +22,43 @@ const localMd = new MarkdownIt({
 export class LlNoteView extends LitElement {
   protected createRenderRoot() { return this; }
 
+  /** V52.10: 用户在阅读模式下的 viewport 中心元素(在 main scroll 时实时更新)
+   *  进入编辑模式时,根据这个元素在 textarea 内设置光标位置(而非末尾) */
+  @state() private lastReadAnchor: HTMLElement | null = null;
+  private scrollHandler = () => {
+    if (this.editing) return;       // 编辑模式不跟踪
+    const main = document.querySelector('.main') as HTMLElement | null;
+    if (!main) return;
+    // 找到 viewport 中心点对应的 article 内元素
+    const article = this.querySelector('article.note') as HTMLElement | null;
+    if (!article) return;
+    const viewportMid = main.scrollTop + main.clientHeight / 2;
+    const articleTop = article.offsetTop;
+    const candidates = article.querySelectorAll('h1, h2, h3, p, li, blockquote, pre, code, table, img');
+    let target: HTMLElement | null = null;
+    for (const el of Array.from(candidates) as HTMLElement[]) {
+      if ((el as HTMLElement).offsetTop + articleTop <= viewportMid) target = el as HTMLElement;
+      else break;
+    }
+    this.lastReadAnchor = target;
+  };
+
+  connectedCallback() {
+    super.connectedCallback();
+    // 用 capture 抓住所有 main scroll(包括工具按钮触发的 scrollIntoView)
+    document.addEventListener('scroll', this.scrollHandler, { capture: true, passive: true });
+  }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    document.removeEventListener('scroll', this.scrollHandler, { capture: true } as any);
+  }
+
   /** V47: note 变化时重新加载反向链接 */
   updated(changed: Map<string, unknown>) {
     if (changed.has('note') && this.note && !this.editing) {
       this.loadBackLinks(this.note.path);
+      // V52.10: 新笔记加载后重置阅读锚点,等用户滚动再记录
+      this.lastReadAnchor = null;
     }
   }
 
@@ -60,19 +93,40 @@ export class LlNoteView extends LitElement {
     }
   }
 
-  /** V43: 进入编辑模式 */
+  /** V43 → V52.10: 进入编辑模式,光标停在用户阅读位置对应行(不再是末尾) */
   private enterEdit() {
     if (!this.note) return;
     this.draft = this.note.content;
+    // V52.10: 在 editing=true 渲染前快照 lastReadAnchor 的 textContent + offsetTop
+    // (渲染后 article 被替换,anchor 会失效)
+    const anchorText = this.lastReadAnchor?.textContent?.trim().slice(0, 60) || '';
+    const anchorTopInArticle = this.lastReadAnchor
+      ? (this.lastReadAnchor as HTMLElement).offsetTop
+      : -1;
     this.editing = true;
     this.saveStatus = undefined;
     this.updateComplete.then(() => {
       const ta = this.querySelector('.note-editor-textarea') as HTMLTextAreaElement | null;
-      if (ta) {
-        ta.focus();
-        const len = ta.value.length;
-        ta.setSelectionRange(len, len);
+      if (!ta) return;
+      ta.focus();
+      // 1) 估算 draft 里的字符位置: 用 anchor 文本前的内容长度(用 textContent 估算)
+      let pos = ta.value.length;
+      if (anchorText) {
+        const idx = ta.value.indexOf(anchorText);
+        if (idx >= 0) pos = idx + anchorText.length;   // 跳到 anchor 末尾
+        else {
+          // 找不到完整 anchor(可能跨元素/markdown 标记干扰),用比例法 fallback
+          const ratio = anchorTopInArticle > 0
+            ? Math.min(1, anchorTopInArticle / Math.max(1, (this.note?.content.length || 1) * 0.5))
+            : 0;
+          pos = Math.floor(ta.value.length * ratio);
+        }
       }
+      // 2) 设光标 + 滚动 textarea 让该位置可见
+      ta.setSelectionRange(pos, pos);
+      // 估算 scrollTop:每行 ~22px,字符/行 约 40
+      const linesBefore = ta.value.substring(0, pos).split('\n').length;
+      ta.scrollTop = Math.max(0, (linesBefore - 5) * 22);
     });
   }
 
@@ -177,21 +231,22 @@ export class LlNoteView extends LitElement {
     const isDirty = this.editing && this.draft !== this.note.content;
 
     return html`
+      <!-- V52.10: 编辑/保存/取消按钮从 .note 内移到 .main-content 直接 child
+           (这样 sticky top:56 在初始 scrollTop=0 时也紧贴 .toolbar bottom 57,
+           之前 .note padding-top 24 + .main-content padding-top 12 = 36px gap 修掉) -->
+      <div class="note-actions">
+        ${this.editing ? html`
+          <button class="note-btn cancel" @click=${() => this.cancelEdit()}>取消</button>
+          <button class="note-btn save primary"
+            ?disabled=${this.saveStatus === false}
+            @click=${() => this.saveEdit()}>
+            ${this.saveStatus === false ? '保存中…' : isDirty ? '💾 保存' : '已保存'}
+          </button>
+        ` : html`
+          <button class="note-btn edit" @click=${() => this.enterEdit()}>✏️ 编辑</button>
+        `}
+      </div>
       <article class="note ${this.editing ? 'editing' : ''}">
-        <!-- V52.9: 编辑/保存/取消按钮从 note-header 右上角 absolute → 移到 note 顶部作为独立 sticky 行
-             (top:56px 正好在 .toolbar 下方),跟 toolbar 风格统一 -->
-        <div class="note-actions">
-          ${this.editing ? html`
-            <button class="note-btn cancel" @click=${() => this.cancelEdit()}>取消</button>
-            <button class="note-btn save primary"
-              ?disabled=${this.saveStatus === false}
-              @click=${() => this.saveEdit()}>
-              ${this.saveStatus === false ? '保存中…' : isDirty ? '💾 保存' : '已保存'}
-            </button>
-          ` : html`
-            <button class="note-btn edit" @click=${() => this.enterEdit()}>✏️ 编辑</button>
-          `}
-        </div>
         <header class="note-header">
           <h1 class="note-title">${this.titleFromPath(this.note.path)}</h1>
           <div class="note-meta">

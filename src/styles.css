@@ -430,8 +430,10 @@ ll-app {
   word-break: break-word;
 }
 
-/* V43 → V52.9: 编辑/保存/取消按钮 — 从 .note-header 右上角 absolute 改为 .note 顶部独立 sticky 行
- * top: 56px 正好在 .toolbar (padding 10+10+36 高 ≈ 56) 下方
+/* V43 → V52.9 → V52.10: 编辑/保存/取消按钮
+ * V52.9: 从 .note-header 右上角 absolute → .note 顶部独立 sticky 行
+ * V52.10: 移到 .main-content 直接 child(top:56px 紧贴 .toolbar bottom 57,
+ *   之前 .note padding 24 + .main-content padding 12 = 36px gap 修掉,初始 scrollTop=0 也紧贴)
  * 风格跟 .toolbar 一致:bg-2 + border-bottom,横向可滚避免窄屏溢出 */
 .note-actions {
   position: sticky;
@@ -444,11 +446,18 @@ ll-app {
   padding: 8px 16px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--border);
-  margin: 0 -20px 16px;   /* 跟 .note padding 对齐,把 bg 拉到边缘 */
+  /* V52.10: 负 margin-top 抵消 .main-content padding-top (mobile 12 / desktop 16),
+   * 让初始 scrollTop=0 时 actions 紧贴 .toolbar bottom (gap=0),
+   * 然后用 padding-bottom 16px 给 article 留空隙 */
+  margin: -12px 0 16px;
   overflow-x: auto;
   scrollbar-width: none;
 }
 .note-actions::-webkit-scrollbar { display: none; }
+@media (min-width: 721px) {
+  /* desktop: .main-content padding-top:16px */
+  .note-actions { margin-top: -16px; }
+}
 .note-btn {
   padding: 5px 12px;
   background: transparent;
