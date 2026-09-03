@@ -322,10 +322,15 @@ async function renderPdf(
     // PDF.js 要 ArrayBuffer
     const buffer = bytesToArrayBuffer(bytes);
     // V50.7: useWorkerFetch: false 强制主线程跑
+    // V52.6: 加 cMapUrl + cMapPacked,修真字 PDF 没 ToUnicode CMap 时的 mojibake
+    // (惠民保系列报告那种 CID 复合字体 PDF 提取出 䇗 䘟 这种乱码)
+    // cMaps 复制自 node_modules/pdfjs-dist/cmaps/*.bcmap 到 public/cmaps/
     const loadingTask = pdfjsLib.getDocument({
       data: buffer,
       useWorkerFetch: false,
       isEvalSupported: true,
+      cMapUrl: './cmaps/',
+      cMapPacked: true,
     } as any);
     loadingTask.onProgress = (p: any) => console.log('[file-opener] PDF load progress:', p.loaded, '/', p.total);
     // PDF.js 3.x 直接是 thenable (没有 .promise)
