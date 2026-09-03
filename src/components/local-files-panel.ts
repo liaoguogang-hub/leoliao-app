@@ -150,7 +150,7 @@ export class LlLocalFilesPanel extends LitElement {
         <div class="modal-panel" style="max-width:720px;max-height:80vh;overflow:auto;touch-action:pan-y;">
           <div class="modal-header">
             <h2>📚 本地参考库</h2>
-            <button class="close-btn" @click=${() => this.close()}>✕</button>
+            <button class="panel-close" title="关闭" aria-label="关闭" @click=${() => this.close()}>✕</button>
           </div>
           <div class="modal-body">
             <p style="font-size:13px;color:var(--dim);margin-top:0">

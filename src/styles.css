@@ -1036,6 +1036,33 @@ ll-app {
   color: white;
 }
 
+/* V52.8: 本地参考库面板关闭按钮 — 圆形 + 醒目图标 + 平滑过渡 */
+.panel-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--dim);
+  font-size: 16px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s, transform 0.1s;
+  flex-shrink: 0;
+  padding: 0;
+  line-height: 1;
+}
+.panel-close:hover,
+.panel-close:active {
+  background: rgba(220, 80, 80, 0.12);
+  border-color: rgba(220, 80, 80, 0.4);
+  color: #d05050;
+  transform: rotate(90deg);
+}
+
 .modal-body {
   padding: 16px 18px;
   overflow-y: auto;
