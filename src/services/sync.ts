@@ -212,7 +212,12 @@ export async function getNote(path: string): Promise<NoteFile | null> {
   // 优先缓存
   const cached = await DB.loadNote(path);
   if (cached) {
-    const parsed = parseNote(cached.content);
+    // v1.14.0: 把 chunks 信息传给 parseNote,渲染时插 data-cid 锚点(用于 jump-to-chunk)
+    const chunks = await DB.loadChunksForNote(path);
+    const parsed = parseNote(cached.content, {
+      chunks: chunks.length > 0 ? chunks.map(c => ({ idx: c.idx, startOffset: c.startOffset, endOffset: c.endOffset })) : undefined,
+      path,
+    });
     return {
       path: cached.path,
       content: cached.content,

@@ -3,6 +3,9 @@
 > 把 Obsidian vault (`/vault/LeoLiao/`) 装进 Android 手机的一个阅读 APP。
 > 由 Lit + TypeScript + Capacitor 编写,数据通过阿里云 OSS 同步。
 
+> **当前版本**: [v1.12.0](./CHANGELOG.md#1120---2026-09-04) · Phase R.1 — Cross-Encoder Rerank 上线
+> **下一版本**: v1.12.1 — chat-panel UI 接入 Rerank 开关
+
 ---
 
 ## 这 APP 是什么 / 不是什幺
@@ -521,10 +524,31 @@ V21      ── 数据格式与错误提示
 | 文档 | 适用读者 | 何时看 |
 |---|---|---|
 | **README.md** (本文) | 所有人,先读 | 下载、安装、用、知道它怎么来的 |
+| **CHANGELOG.md** | 所有人 | 看版本变更记录 |
+| **docs/releases/** | 开发者 / 用户 | 每个版本的发布说明 |
 | **SETUP.md** | 老历史 | 项目搭建初期 |
 | **BUILD-GUIDE.md** | 开发者 | 在 Windows 上 rebuild APK 时 |
 | **PLATFORM-GUIDE.md** | 开发者 | 要做 iOS 或理解架构时 |
 | **APP-DEV-COMPLETE-GUIDE.md** | 任何开发者 | 做新 App 项目时,这一份就能上手 |
+
+---
+
+## 📋 最近变更(2026-09 起)
+
+### v1.12.0 — Phase R.1 — Cross-Encoder Rerank 上线(2026-09-04)
+
+**新增**:
+- 🔀 三档降级 Rerank 引擎 (`lib/reranker.ts`):cross-encoder → BM25 重打分 → passthrough
+- ⚡ `search()` 签名扩展支持 `rerankOpts` 可选参数(向后兼容)
+- 🛡 3 秒硬超时 + 永不抛错保护
+
+**下一步**(v1.12.1 ~ v1.13.0):
+- chat-panel UI 接入 Rerank 开关
+- 侧栏三 Tab 搜索 UI(📂 路径 / 📖 全文 / 🧠 语义)
+- Chunk 级跳转 + 高亮
+- 流式引用侧栏
+
+详见 [CHANGELOG.md](./CHANGELOG.md) 与 [docs/releases/v1.12.0.md](./docs/releases/v1.12.0.md)。
 
 ---
 

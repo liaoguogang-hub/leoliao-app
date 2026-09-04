@@ -41,3 +41,18 @@ export function saveLLMSettings(s: LLMSettings): void {
     localStorage.setItem(KEY, JSON.stringify(s));
   } catch {}
 }
+
+/** v1.41.0: 按 provider 独立存 API Key — 切模型/切 provider 不用重新输 key */
+export function loadProviderApiKeys(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem('kb-llm-provider-keys') || '{}');
+  } catch { return {}; }
+}
+
+export function saveProviderApiKey(provider: string, apiKey: string): void {
+  try {
+    const map = loadProviderApiKeys();
+    map[provider] = apiKey;
+    localStorage.setItem('kb-llm-provider-keys', JSON.stringify(map));
+  } catch {}
+}

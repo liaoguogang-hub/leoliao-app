@@ -12,7 +12,7 @@
  */
 
 import { LitElement, html, nothing } from 'lit';
-import { customElement, state } from 'lit/decorators.js';
+import { customElement, state, property } from 'lit/decorators.js';
 import { PROVIDERS, PROVIDER_LIST, type ProviderId } from '../lib/llm-providers';
 import { chatStream, testConnection, chatOnce, type ChatMessage, type LLMSettings } from '../lib/llm';
 import { search as kbSearch, buildFullRAGPrompt, type SearchResult, type SearchMode } from '../lib/search';
@@ -21,7 +21,7 @@ import {
   agentSystemPrompt, parseToolCall, executeToolCall, wrapToolResult,
   type AgentStep, type AgentContext,
 } from '../lib/agent';
-import { loadLLMSettings, saveLLMSettings } from '../services/llm-settings';
+import { loadLLMSettings, saveLLMSettings, loadProviderApiKeys, saveProviderApiKey } from '../services/llm-settings';
 import { loadWebSettings, saveWebSettings } from '../services/web-settings';
 import { loadMemorySettings, saveMemorySettings, type MemorySettings } from '../services/memory-settings';
 import { extractFromConversation } from '../services/memory';
@@ -92,6 +92,8 @@ export class LlChatPanel extends LitElement {
   @state() private input = '';
   @state() private sending = false;
   @state() private useKB = true;             // 是否启用 KB 检索（RAG 模式）
+  // v1.15.0: 流式引用侧栏 — 当前 assistant 流式输出中提到的 [KB#N] 实时聚合
+  @state() private liveCitations: Array<{ idx: number; result: SearchResult }> = [];
   @state() private useWeb = false;           // 是否启用联网搜索
   @state() private useAgent = true;          // V45: Agent 模式(启用后 LLM 可调工具)
   /** V44: KB 检索范围(文件夹前缀列表,空=全部) */
@@ -100,10 +102,16 @@ export class LlChatPanel extends LitElement {
   @state() private allDirs: string[] = [];
   /** V48: 检索模式(bm25 / vector / hybrid) */
   @state() private searchMode: SearchMode = 'hybrid';
+  /** v1.12.1: 是否启用 Rerank(默认 false,保持向后兼容;开启后会用 cross-encoder 二排) */
+  @state() private useRerank = false;
+  // v1.20.0: 附加当前笔记全文为额外上下文(由 main.ts 通过 property 传入路径)
+  @property({ type: String }) currentNotePath = '';
+  /** v1.12.1: Rerank topN(默认 10,即对 RRF 后的 top10 二次精排) */
+  @state() private rerankTopN = 10;
   /** V49: 是否把本地 PDF 等加入 KB 范围 */
-  @state() private includeLocal = false;
+  @state() private includeLocal = true;  // v1.25.0: 默认 true — 用户期待"开了 chat 就能问 PDF/EPUB"
   /** V45: Agent 启用的工具列表(默认全部启用) */
-  @state() private enabledTools: string[] = ['kb_search', 'web_search', 'note_open', 'list_files', 'note_edit'];
+  @state() private enabledTools: string[] = ['kb_search', 'web_search', 'note_open', 'list_files', 'note_edit', 'get_chunk', 'list_tags', 'get_history', 'find_by_tag'];
   /** V46: 长期记忆设置 */
   @state() private memory!: MemorySettings;
   /** V46: Memory panel 是否打开 */
@@ -167,6 +175,23 @@ export class LlChatPanel extends LitElement {
     this.settings = loadLLMSettings();
     this.web = loadWebSettings();
     this.memory = loadMemorySettings();
+    // v1.41.0: 启动时从按-provider 缓存带出当前 provider 的 apiKey(避免重输)
+    const cachedKey = loadProviderApiKeys()[this.settings.provider];
+    if (cachedKey && !this.settings.apiKey) {
+      this.settings = { ...this.settings, apiKey: cachedKey };
+    }
+    // v1.12.1: 恢复 Rerank 设置(默认 false)
+    try {
+      const saved = JSON.parse(localStorage.getItem('ll-chat-rerank') || '{}');
+      if (typeof saved.useRerank === 'boolean') this.useRerank = saved.useRerank;
+      if (typeof saved.rerankTopN === 'number' && saved.rerankTopN > 0) this.rerankTopN = saved.rerankTopN;
+    } catch { /* 首次启动 — 默认值 */ }
+    // v1.25.0: 恢复 includeLocal 默认 true(如果 localStorage 没存过)
+    try {
+      const llSaved = JSON.parse(localStorage.getItem('ll-chat-include-local') || 'null');
+      if (typeof llSaved === 'boolean') this.includeLocal = llSaved;
+      // 如果没存过,保持默认 true(已在 @state 里)
+    } catch { /* 用默认 true */ }
     // V1.1.2+: 防御性同步 — 如果 settings.baseUrl / model 跟当前 provider 的默认值不一致
     // （典型 bug：用户从 v1.1.0 升级上来，或用 inject 方式灌了 deepseek 配置后切到 MiniMax），
     // 自动 fallback 到 provider 默认值，避免 baseUrl 还是 deepseek 的域名 + MiniMax key 这种错配。
@@ -326,6 +351,16 @@ export class LlChatPanel extends LitElement {
     saveLLMSettings(this.settings);
   }
 
+  /** v1.12.1: 持久化 Rerank 开关 */
+  private persistRerank() {
+    try {
+      localStorage.setItem('ll-chat-rerank', JSON.stringify({
+        useRerank: this.useRerank,
+        rerankTopN: this.rerankTopN,
+      }));
+    } catch { /* 静默失败 — 重启后丢失 */ }
+  }
+
   private async onTestConnection() {
     this.testStatus = { ok: false, msg: '测试中…' };
     const result = await testConnection(this.settings);
@@ -346,6 +381,8 @@ export class LlChatPanel extends LitElement {
       provider: id,
       baseUrl: providerChanged ? preset.defaultBaseUrl : (this.settings.baseUrl || preset.defaultBaseUrl),
       model: providerChanged ? preset.defaultModel : (this.settings.model || preset.defaultModel),
+      // v1.41.0: 切 provider 时带出该 provider 已存的 apiKey(不用重输)
+      apiKey: loadProviderApiKeys()[id] ?? this.settings.apiKey,
     };
     this.persistSettings();
     this.testStatus = null;
@@ -387,7 +424,34 @@ export class LlChatPanel extends LitElement {
     console.log('[chat.send] q=', q, 'useKB=', this.useKB, 'useWeb=', this.useWeb, 'web.url=', this.web?.url, 'maxTokens=', this.settings.maxTokens);
     if (this.useKB) {
       // V49: 传 searchMode + searchPaths + includeLocal(本地 PDF)
-      kbCitations = await kbSearch(q, 9999, 30000, this.searchPaths, this.searchMode, this.includeLocal);
+      // v1.12.1: 透传 rerankOpts(用户设置里开关)— 默认关闭,保持向后兼容
+      const rerankOpts = this.useRerank
+        ? { topN: this.rerankTopN, timeoutMs: 3000 }
+        : undefined;
+      kbCitations = await kbSearch(q, 9999, 30000, this.searchPaths, this.searchMode, this.includeLocal, rerankOpts);
+    }
+    // v1.20.0: 把"当前打开的笔记"作为额外上下文(优先级 > 检索结果)
+    if (this.currentNotePath) {
+      try {
+        const { loadNote, loadChunksForNote } = await import('../services/db');
+        const currentNote = await loadNote(this.currentNotePath);
+        if (currentNote) {
+          const chunks = await loadChunksForNote(this.currentNotePath);
+          const ctxChunks = chunks.slice(0, 5).map((c: any) => ({
+            path: currentNote.path,
+            idx: c.idx,
+            heading: c.heading,
+            title: currentNote.path.split('/').pop()?.replace(/\.md$/, '') || currentNote.path,
+            snippet: c.content,
+            score: 1.0,
+            mtime: currentNote.mtime,
+          }));
+          // 插入到 kbCitations 最前面(高优先级)
+          kbCitations = [...ctxChunks, ...kbCitations].slice(0, 30);
+        }
+      } catch (e) {
+        console.warn('[chat] attachCurrentNote failed:', e);
+      }
     }
     if (this.useWeb && this.web.url) {
       try {
@@ -442,6 +506,17 @@ export class LlChatPanel extends LitElement {
     }
     messages.push(...recent);
 
+    // v1.23.0 Fix-C: 注入长期记忆(非 agent 路径)
+    try {
+      const { buildMemoryPrompt } = await import('../services/memory');
+      const memoryPrompt = await buildMemoryPrompt();
+      if (memoryPrompt) {
+        messages.push({ role: 'system', content: memoryPrompt });
+      }
+    } catch (e) {
+      console.warn('[chat] load memory failed:', e);
+    }
+
     // V45: Agent 模式 → 走 ReAct 循环
     if (this.useAgent && this.enabledTools.length > 0) {
       await this.runAgentReAct(q, messages, sessionId, kbCitations, webCitations);
@@ -452,6 +527,9 @@ export class LlChatPanel extends LitElement {
 
     // 5) 流式请求 — V42: AbortController 让 ⏹ 停止按钮能用
     this.currentAbort = new AbortController();
+    // v1.15.0: 每次新对话重置 liveCitations(让 drawer 从空开始)
+    this.clearLiveCitations();
+
     let fullText = '';
     let aborted = false;
     try {
@@ -462,6 +540,8 @@ export class LlChatPanel extends LitElement {
         const updated = [...this.messages];
         updated[idx] = { ...updated[idx], content: fullText };
         this.messages = updated;
+        // v1.15.0: 流式解析 [KB#N] 引用,实时追加到 liveCitations
+        this.parseLiveCitations(fullText, kbCitations);
       }
     } catch (e: any) {
       // V42: 主动 abort 也走 catch,标记 aborted,文字尾部加 [已停止]
@@ -510,6 +590,40 @@ export class LlChatPanel extends LitElement {
         if (topics.length > 0) console.log('[memory] extracted', topics.length, 'topics');
       })
       .catch(e => console.warn('[memory] extract failed', e));
+  }
+
+  /**
+   * v1.15.0: 流式解析 [KB#N] 引用 token,实时追加到 liveCitations
+   *
+   * 设计:
+   * - 全文本正则匹配 /\[KB#(\d+)\]/g,取出所有引用 idx
+   * - 对每个 idx 查 kbCitations[idx-1](因为 RAG prompt 里 #1 对应数组下标 0)
+   * - 去重(同一个 chunk 不重复出现)
+   * - setState 触发 drawer 重渲染
+   */
+  private parseLiveCitations(fullText: string, kbCitations: SearchResult[]) {
+    const re = /\[KB#(\d+)\]/g;
+    const seen = new Set<number>();
+    const next: Array<{ idx: number; result: SearchResult }> = [];
+    let m;
+    while ((m = re.exec(fullText)) !== null) {
+      const idx = parseInt(m[1], 10);
+      if (seen.has(idx)) continue;
+      seen.add(idx);
+      const result = kbCitations[idx - 1];
+      if (result) next.push({ idx, result });
+    }
+    // 只在真的有新增时 setState(性能)
+    if (next.length === this.liveCitations.length &&
+        next.every((x, i) => x.idx === this.liveCitations[i]?.idx)) {
+      return;
+    }
+    this.liveCitations = next;
+  }
+
+  /** v1.15.0: 流式结束后保留 drawer 内容(直到下次发送) */
+  private clearLiveCitations() {
+    this.liveCitations = [];
   }
 
   /** V42 helper: 持久化助手消息 + 回填 id */
@@ -628,6 +742,12 @@ export class LlChatPanel extends LitElement {
       searchPaths: this.searchPaths,
       webSettings: this.web,
       signal: this.currentAbort?.signal,
+      // v1.12.1: 透传 chat-panel 的 Rerank 设置
+      searchMode: this.searchMode,
+      useRerank: this.useRerank,
+      rerankTopN: this.rerankTopN,
+      // v1.24.0 Fix-5: 透传 includeLocal — Agent kb_search 默认 true,但保险起见再传
+      includeLocal: this.includeLocal,
     };
     const messages: ChatMessage[] = [...initialMessages];
     // 把"原 query"作为最后一条 user
@@ -636,12 +756,36 @@ export class LlChatPanel extends LitElement {
     } else {
       // 已经是 user,保持
     }
+    // v1.23.0 Fix-C: 注入长期记忆(跨 session 的用户偏好/事实)
+    try {
+      const { buildMemoryPrompt } = await import('../services/memory');
+      const memoryPrompt = await buildMemoryPrompt();
+      if (memoryPrompt) {
+        // 在 system prompt 之后插入(让 LLM 在对话中看到记忆)
+        const sysIdx = messages.findIndex(m => m.role === 'system');
+        const memoryMsg: ChatMessage = {
+          role: 'system',
+          content: memoryPrompt,
+        };
+        if (sysIdx >= 0) {
+          messages.splice(sysIdx + 1, 0, memoryMsg);
+        } else {
+          messages.unshift(memoryMsg);
+        }
+      }
+    } catch (e) {
+      console.warn('[chat] load memory failed:', e);
+    }
     const steps: AgentStep[] = [];
     let fullAnswer = '';
     let finalKb = [...initialKb];
     let finalWeb = [...initialWeb];
 
-    const MAX_STEPS = 5;
+    const MAX_STEPS = 18;  // v1.37.0: 8 → 18(逐章检索"每章"问题需要多步)
+    // v1.24.0 Fix-2: stuck-loop 检测 — 记录 (toolName, argsHash) 序列,
+    // 连续 2 次相同就强制终止(LLM 在空转)
+    const toolCallHistory: string[] = [];
+    let lastLlmText = '';  // v1.24.0 Fix-4: 记下最后一次 LLM 输出,作为 fallback
     for (let i = 0; i < MAX_STEPS; i++) {
       // 中途停止检查
       if (this.currentAbort?.signal.aborted) break;
@@ -649,8 +793,10 @@ export class LlChatPanel extends LitElement {
       let llmText = '';
       try {
         llmText = await chatOnce(messages, this.settings);
+        lastLlmText = llmText;  // v1.24.0 Fix-4: 记录
       } catch (e: any) {
         llmText = `[Agent 错误: ${e?.message || e}]`;
+        lastLlmText = llmText;
         steps.push({ step: i + 1, error: llmText, ts: Date.now() });
         break;
       }
@@ -667,6 +813,28 @@ export class LlChatPanel extends LitElement {
       }
       // 有工具调用 → 执行
       const tc = parsed.tool;
+      // v1.24.0 Fix-2: 检测 stuck-loop — 连续 2 次相同 (toolName, args)
+      const tcSig = `${tc.name}|${JSON.stringify(tc.args || {})}`;
+      toolCallHistory.push(tcSig);
+      if (toolCallHistory.length >= 2 &&
+          toolCallHistory[toolCallHistory.length - 1] === toolCallHistory[toolCallHistory.length - 2]) {
+        // LLM 在空转,主动停止 + 给最终答案提示
+        console.warn('[Agent] detected stuck-loop:', tcSig);
+        // 注入 final-answer 提示,再调一次 LLM 强制收敛
+        messages.push({ role: 'assistant', content: llmText });
+        messages.push({
+          role: 'user',
+          content: '⚠️ 你已经连续 2 次调用同一个工具并得到相同结果。**请立即给出最终答案**(不要再调用任何工具,直接用你已经看到的信息回答)。',
+        });
+        try {
+          const finalText = await chatOnce(messages, this.settings);
+          fullAnswer = finalText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+          steps.push({ step: i + 1, thought: '(stuck-loop, 强制收敛)', result: fullAnswer, ts });
+        } catch (e: any) {
+          fullAnswer = `[Agent stuck-loop,最终调用失败: ${e?.message || e}]`;
+        }
+        break;
+      }
       // 检查是否启用
       if (!this.enabledTools.includes(tc.name)) {
         steps.push({
@@ -725,10 +893,18 @@ export class LlChatPanel extends LitElement {
       messages.push({ role: 'assistant', content: llmText });
       messages.push({ role: 'user', content: wrapToolResult(tc.name, execResult.ok ? execResult.result : { error: execResult.error }) });
     }
-    // 如果 5 步后没拿到答案,llmText 可能是最后一次循环的内容
-    if (!fullAnswer && messages.length > 0) {
-      fullAnswer = `[Agent 跑了 ${steps.length} 步,没拿到最终答案]\n\n最后一条消息:\n` +
-        messages[messages.length - 1].content.slice(0, 500);
+    // v1.24.0 Fix-4: fallback 优化 — 用最后一次 LLM 输出代替机械错误提示
+    if (!fullAnswer) {
+      if (lastLlmText && lastLlmText.trim()) {
+        // 去掉 tool_call 残留 + thought 前缀
+        fullAnswer = lastLlmText.replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').trim();
+        console.warn('[Agent] no explicit final answer, using last LLM output as fallback');
+      } else if (messages.length > 0) {
+        fullAnswer = `[Agent 跑了 ${steps.length} 步,没拿到最终答案]\n\n最后一条消息:\n` +
+          messages[messages.length - 1].content.slice(0, 500);
+      } else {
+        fullAnswer = `[Agent 跑了 ${steps.length} 步,没拿到最终答案]`;
+      }
     }
     // 更新 UI
     this.messages = this.messages.map((m, i) =>
@@ -781,7 +957,13 @@ export class LlChatPanel extends LitElement {
         <div class="setting-row">
           <label>API Key</label>
           <input type="password" .value=${s.apiKey} placeholder="sk-..." autocomplete="off"
-            @input=${(e: Event) => { this.settings = { ...s, apiKey: (e.target as HTMLInputElement).value }; this.persistSettings(); }} />
+            @input=${(e: Event) => {
+              const v = (e.target as HTMLInputElement).value;
+              this.settings = { ...s, apiKey: v };
+              this.persistSettings();
+              // v1.41.0: 按 provider 存,切模型不用重输
+              saveProviderApiKey(this.settings.provider, v);
+            }} />
         </div>
 
         <div class="setting-row">
@@ -850,12 +1032,36 @@ export class LlChatPanel extends LitElement {
               <option value="vector" ?selected=${this.searchMode === 'vector'}>🎯 纯向量</option>
             </select>
           </div>
+          <!-- v1.12.1: Rerank 开关(三档降级,默认关闭) -->
+          <div class="setting-row">
+            <label class="checkbox-label" style="display:flex;align-items:center;gap:6px">
+              <input type="checkbox" ?checked=${this.useRerank}
+                @change=${(e: Event) => { this.useRerank = (e.target as HTMLInputElement).checked; this.persistRerank(); console.log('[chat] useRerank →', this.useRerank); }} />
+              🎯 启用 Rerank(精确化检索结果)
+            </label>
+          </div>
+          ${this.useRerank ? html`
+            <div class="setting-row">
+              <label>Rerank TopN</label>
+              <input type="number" min="3" max="50" step="1" class="modal-input"
+                style="width:80px"
+                .value=${String(this.rerankTopN)}
+                @input=${(e: Event) => { const v = parseInt((e.target as HTMLInputElement).value); if (!isNaN(v) && v > 0) { this.rerankTopN = v; this.persistRerank(); } }} />
+              <span class="setting-hint" style="margin-left:8px;color:var(--dim);font-size:11px">
+                对 RRF 后的前 N 条做二次精排(默认 10)
+              </span>
+            </div>
+          ` : nothing}
           <!-- V49: 本地文件 KB 范围 -->
           <div class="setting-row">
             <label class="checkbox-label">
               <input type="checkbox" ?checked=${this.includeLocal}
-                @change=${(e: Event) => { this.includeLocal = (e.target as HTMLInputElement).checked; }} />
+                @change=${(e: Event) => {
+                  this.includeLocal = (e.target as HTMLInputElement).checked;
+                  try { localStorage.setItem('ll-chat-include-local', JSON.stringify(this.includeLocal)); } catch {}
+                }} />
               📂 包含本地文件(已打开的 PDF 等)
+              ${this.includeLocal ? html`<span style="color:var(--ok);font-size:11px;margin-left:6px">✓ 已启用</span>` : html`<span style="color:var(--warn);font-size:11px;margin-left:6px">⚠ 关闭中 — 不会搜本地 PDF/EPUB</span>`}
             </label>
           </div>
         ` : nothing}
@@ -961,7 +1167,7 @@ export class LlChatPanel extends LitElement {
                 ${kb.map((c, i) => html`
                   <div class="citation-card kb"
                     title="点击跳转到笔记"
-                    @click=${() => this.dispatchEvent(new CustomEvent('open-citation', { detail: { path: c.path, snippet: c.snippet, score: c.score }, bubbles: true, composed: true }))}>
+                    @click=${() => this.dispatchEvent(new CustomEvent('open-citation', { detail: { path: c.path, idx: c.idx, snippet: c.snippet, score: c.score }, bubbles: true, composed: true }))}>
                     <div class="citation-card-head">
                       <span class="citation-card-tag">KB#${i + 1}</span>
                       <span class="citation-card-title">${c.title}</span>
@@ -1228,6 +1434,35 @@ export class LlChatPanel extends LitElement {
           </div>
         </div>
       </div>
+
+      <!-- v1.15.0: 流式引用侧栏 — 实时显示 [KB#N] 引用卡片 -->
+      ${this.liveCitations.length > 0 ? html`
+        <aside class="citations-drawer ${this.sending ? 'streaming' : 'idle'}">
+          <div class="drawer-head">
+            <span class="drawer-title">📑 引用 (${this.liveCitations.length})</span>
+            ${this.sending ? html`<span class="drawer-streaming">⏳ 流式中...</span>` : ''}
+          </div>
+          <div class="drawer-list">
+            ${this.liveCitations.map(({ idx, result }) => html`
+              <div class="drawer-card"
+                title="点击跳转到笔记该 chunk"
+                @click=${() => this.dispatchEvent(new CustomEvent('open-citation', {
+                  detail: { path: result.path, idx: result.idx, snippet: result.snippet, score: result.score },
+                  bubbles: true, composed: true,
+                }))}>
+                <div class="drawer-card-head">
+                  <span class="drawer-card-tag">KB#${idx}</span>
+                  <span class="drawer-card-title">${result.title}</span>
+                </div>
+                ${result.heading && result.heading !== result.title ? html`
+                  <div class="drawer-card-heading">📌 ${result.heading}</div>
+                ` : nothing}
+                <div class="drawer-card-snippet">${result.snippet.slice(0, 100)}${result.snippet.length > 100 ? '…' : ''}</div>
+              </div>
+            `)}
+          </div>
+        </aside>
+      ` : nothing}
     `;
   }
 }

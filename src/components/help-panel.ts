@@ -1,13 +1,12 @@
 /**
  * 帮助面板 — 使用说明
- * V52.12: 全量更新,反映 v1.11.11 (2026-09-03) 所有新功能:
- *  - 本地参考库(V51 + V52.7 删除索引)
- *  - 文件树长按菜单(V52.7 重命名/移动/删除/新建子)
- *  - PDF/EPUB 入库(V49/V50 + V52.6 cMap)
- *  - 编辑光标按阅读百分比(V52.11)
- *  - 工具栏 + 文件名真机 swipe(V52.5)
- *  - Wiki / 长期记忆 / Agent / 混合检索(V43-V48)
- *  - 多会话 / 历史 / 分享面板
+ * v1.48.0: 反映 v1.23.0 → v1.48.0 全部新功能:
+ *  - 侧栏三 Tab 搜索(📂 路径 / 📖 全文 / 🧠 语义)+ Rerank
+ *  - 多 provider API Key 独立保存(切模型不用重输)
+ *  - 关系列表视图(替代知识图谱,可筛选/分组)
+ *  - 本地文件一键重索引 / 去重(🔄 / 🧹)
+ *  - EPUB 章节级切分(heading 保留章节名)
+ *  - 严格 RAG(不编造,KB 无原文会明说)
  */
 
 import { LitElement, html } from 'lit';
@@ -51,9 +50,44 @@ export class LlHelpPanel extends LitElement {
             </section>
 
             <section>
+              <h3>🔍 搜索(三 Tab)</h3>
+              <ul>
+                <li>侧栏搜索框下方有 <b>📂 路径 / 📖 全文 / 🧠 语义</b> 三个 Tab</li>
+                <li><b>📂 路径</b>:按文件名/路径子串匹配(最快)</li>
+                <li><b>📖 全文</b>:搜 chunk 正文内容(BM25),结果卡片高亮命中词</li>
+                <li><b>🧠 语义</b>:BM25 + 向量 + RRF 融合,支持自然语言问句</li>
+                <li>全文/语义 Tab 可勾 <b>🎯 Rerank</b> 二次精排(更准,稍慢)</li>
+                <li><b>Ctrl/Cmd+K</b> 快捷聚焦搜索框</li>
+              </ul>
+            </section>
+
+            <section>
+              <h3>🕸 关系列表(原知识图谱)</h3>
+              <ul>
+                <li>工具栏 <b>🕸</b> 打开"关系列表",按被引用数排序展示所有 wikilink</li>
+                <li>每张卡片展开看 <b>🔗 引用了</b> 和 <b>⬅ 被引用</b>,点链接直接跳笔记</li>
+                <li>顶部分组:<b>🔽 按被引数</b> / <b>📁 按目录</b></li>
+                <li>筛选:<b>全部 / 被引≥1 / ≥3(枢纽) / ≥5(核心)</b></li>
+                <li>若关系很少,用 <b>✨ 自动建立链接</b> 扫笔记标题注入 <code>[[xxx]]</code>;<b>↩️ 回滚注入</b> 撤销</li>
+              </ul>
+            </section>
+
+            <section>
+              <h3>⚙️ LLM 设置(多模型)</h3>
+              <ul>
+                <li>对话面板 <b>⚙️</b> 可配多个 provider(OpenAI 兼容 / MiniMax 等)</li>
+                <li><b>API Key 按 provider 自动保存</b> — 切换模型/供应商不用重输 Key(V1.41+)</li>
+                <li>切换 provider 时 baseUrl/model 自动切到该商默认值</li>
+              </ul>
+            </section>
+
+            <section>
               <h3>📕 本地参考库(V51+)</h3>
               <ul>
                 <li>顶部 <b>📖</b> 按钮打开"本地参考库"面板,列出已索引的本地 PDF / EPUB</li>
+                <li><b>🔄 重索引全部(V1.34+)</b>:从已提取全文重切 chunk(EPUB 章节级),大文件也能处理</li>
+                <li><b>🧹 清理重复(V1.39+)</b>:同一文件被索引成多份时(如 xxx.md / xxx.epub.md),保留最完整的一份,删其余</li>
+                <li>同一本书若出现多次会导致检索被拆散 — 先"清理重复"再"重索引"</li>
                 <li>点工具栏 <b>📂</b> 打开 PDF/EPUB 后,后台自动提取文字 + 切 chunk + 写库(<b>不用重启</b>)</li>
                 <li>索引完成后自动存一份 <b>📕/📘 xxx.md</b> 进 vault + 上 OSS,文件树里也能搜到</li>
                 <li>展开卡片看章节预览 + 字数 + 最近索引时间</li>
@@ -146,11 +180,14 @@ export class LlHelpPanel extends LitElement {
               <p><b>首次加载慢?</b> vault 一次性下载所有 .md,首次几秒到几十秒,之后缓存就好。</p>
               <p><b>wikilink 跳不过去?</b> 笔记名一字不差,或者点 × 看搜索框候选。</p>
               <p><b>本地 PDF 打开空白?</b> 可能是扫描版(只有图没文字层),V52.6 cMap 救不了,需要 OCR。</p>
-              <p><b>工具栏按钮太多被裁?</b> V52.3 toolbar 自身横向可滚,从右向左滑即可看到所有按钮(外链/帮助)。</p>
-              <p><b>同步失败?</b> 看 <code>~/.cc-connect/cc-connect.log</code> 或问我。</p>
+              <p><b>PDF 只有几个 chunks?</b> 先确认 PDF 总页数 —— 9 页 PDF = 9 chunks 正常;若几十页只有 9,是图文型 PDF(文字层少)。</p>
+              <p><b>问某本书某章 Agent 说"没原文"?</b> 先确认该书已完整索引(本地参考库看 chunks 数),同一本书重复会拆散检索,先 🧹 清理。</p>
+              <p><b>Agent 会编造吗?</b> 不会 —— 严格 RAG 模式,KB 无原文会如实说"未检索到",不拿训练知识冒充。</p>
+              <p><b>工具栏按钮太多被裁?</b> V52.3 toolbar 自身横向可滚,从右向左滑即可看到所有按钮。</p>
+              <p><b>同步失败?</b> 看 logcat 或问开发者。</p>
             </section>
 
-            <p class="version">知识库 APK v1.11.11 · 2026-09-03 · 最近更新:本地参考库删除、文件树长按菜单、PDF cMap、编辑光标按百分比</p>
+            <p class="version">知识库 APK v1.48 · 2026-09-05 · 最近更新:三 Tab 搜索 + Rerank、关系列表、多模型 Key 独立保存、EPUB 章节切分、清理重复、严格 RAG</p>
           </div>
         </div>
       </div>

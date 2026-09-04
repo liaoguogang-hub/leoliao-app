@@ -1,11 +1,18 @@
 /**
  * V44: 文档 chunk 切分引擎
+ * v1.26.0: 加 paragraphOnly + forceChunkSize 选项 — 让无标题文本(前言/目录/EPUB 章节)能细切
  *
- * 策略:
+ * 策略(默认 mode='heading'):
  * - 按二级标题 (## ...) 切分(若没有则整个文档为 1 个 chunk)
  * - 每个 chunk 目标 500 字,超过则按段落再切
  * - 留 100 字 overlap 让跨段语义更连贯
- * - 返回: { path, idx, heading, content, startOffset, endOffset }
+ *
+ * 策略(mode='paragraph-only'):v1.26.0 新增
+ * - 完全按段落 + 字数切分,不依赖二级标题
+ * - 适用于:前言/后记/目录/EPUB 单章节(无 # 标记)
+ * - 每 ~forceChunkSize 字切一段
+ *
+ * 返回: { path, idx, heading, content, startOffset, endOffset }
  */
 
 export interface Chunk {
@@ -17,19 +24,33 @@ export interface Chunk {
   endOffset: number;      // 结束字符位置(不含)
 }
 
+export interface ChunkOptions {
+  /** 切分模式:'heading'(默认) | 'paragraph-only'(v1.26) */
+  mode?: 'heading' | 'paragraph-only';
+  /** paragraph-only 模式下,每 ~forceChunkSize 字切一段(默认 400) */
+  forceChunkSize?: number;
+}
+
 const OVERLAP_CHARS = 100;      // 跨段 overlap
 const HARD_MAX = 800;           // 单 chunk 硬上限(实际目标 ~500-800 字)
 const HARD_MIN = 100;            // 太短就合到上一 chunk
+const DEFAULT_FORCE_CHUNK = 400; // v1.26.0: paragraph-only 模式默认 400 字一段
 
-/** 主入口:按二级标题 + 段落切分一篇 md 文档 */
-export function chunkDocument(path: string, content: string): Chunk[] {
+/** 主入口 */
+export function chunkDocument(path: string, content: string, opts: ChunkOptions = {}): Chunk[] {
   const fileName = path.split('/').pop()?.replace(/\.md$/, '') || path;
-  const sections = splitByHeadings(content);   // 按 ## 切
+
+  // v1.26.0: paragraph-only 模式 — 纯按段落 + 字数切
+  if (opts.mode === 'paragraph-only') {
+    return chunkParagraphOnly(path, content, fileName, opts.forceChunkSize ?? DEFAULT_FORCE_CHUNK);
+  }
+
+  // 默认 heading 模式
+  const sections = splitByHeadings(content);
   const chunks: Chunk[] = [];
   let idx = 0;
   for (const sec of sections) {
     const heading = sec.heading || fileName;
-    // 一段可能超长,按段落再切
     const pieces = splitByParagraph(sec.content, sec.startOffset);
     for (const p of pieces) {
       chunks.push({
@@ -42,6 +63,110 @@ export function chunkDocument(path: string, content: string): Chunk[] {
       });
     }
   }
+  return chunks;
+}
+
+/** v1.26.0: paragraph-only 模式 — 完全按段落 + 字数切, 不依赖 ## 标记
+ *  算法:
+ *  1. 按双换行(\n\n)拆成段落
+ *  2. 累加段落,直到总字数 >= forceChunkSize 就切一个 chunk
+ *  3. 边界硬切:超过 forceChunkSize * 1.5 还没遇到 \n\n,强制按字数切
+ *  4. overlap 100 字(同 heading 模式)
+ */
+function chunkParagraphOnly(
+  path: string,
+  content: string,
+  fileName: string,
+  forceSize: number,
+): Chunk[] {
+  const trimmed = content.trim();
+  if (!trimmed) return [];
+
+  // 按 \n\n 拆段
+  const paragraphs: Array<{ text: string; startOffset: number }> = [];
+  let pos = 0;
+  const paraSep = /\n\s*\n/g;
+  let m: RegExpExecArray | null;
+  while ((m = paraSep.exec(trimmed)) !== null) {
+    const start = m.index;
+    const end = m.index + m[0].length;
+    const text = trimmed.slice(pos, start).trim();
+    if (text) {
+      paragraphs.push({
+        text,
+        startOffset: content.indexOf(text, pos >= 0 ? pos : 0),
+      });
+    }
+    pos = end;
+  }
+  // 最后一段
+  const lastText = trimmed.slice(pos).trim();
+  if (lastText) {
+    paragraphs.push({
+      text: lastText,
+      startOffset: content.indexOf(lastText, Math.max(0, pos)),
+    });
+  }
+
+  // 累加段落成 chunk
+  const chunks: Chunk[] = [];
+  let curText = '';
+  let curStart = 0;
+  let idx = 0;
+
+  const flush = () => {
+    if (curText.trim()) {
+      chunks.push({
+        path,
+        idx: idx++,
+        heading: `${fileName} #${idx}`,
+        content: curText.trim(),
+        startOffset: curStart,
+        endOffset: curStart + curText.length,
+      });
+    }
+  };
+
+  for (const p of paragraphs) {
+    // 单段就超过 1.5x — 强制按字数切
+    if (p.text.length > forceSize * 1.5) {
+      flush();
+      // 按字数切这一段
+      let subPos = 0;
+      while (subPos < p.text.length) {
+        const subEnd = Math.min(subPos + forceSize, p.text.length);
+        const piece = p.text.slice(subPos, subEnd);
+        chunks.push({
+          path,
+          idx: idx++,
+          heading: `${fileName} #${idx}`,
+          content: piece,
+          startOffset: p.startOffset + subPos,
+          endOffset: p.startOffset + subEnd,
+        });
+        if (subEnd >= p.text.length) break;
+        subPos = Math.max(subEnd - OVERLAP_CHARS, subPos + 1);
+      }
+      curText = '';
+      continue;
+    }
+    // 累加
+    if (curText.length === 0) {
+      curStart = p.startOffset;
+      curText = p.text;
+    } else {
+      curText += '\n\n' + p.text;
+    }
+    // 满了就 flush
+    if (curText.length >= forceSize) {
+      flush();
+      // overlap:留最后 ~100 字给下一 chunk
+      const overlapText = curText.slice(-OVERLAP_CHARS);
+      curText = overlapText;
+      curStart = p.startOffset + p.text.length - overlapText.length;
+    }
+  }
+  flush();
   return chunks;
 }
 

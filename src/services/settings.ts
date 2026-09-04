@@ -140,4 +140,24 @@ export function applySettings(s: ThemeSettings): void {
   root.style.setProperty('--border', s.borderColor);
   root.style.setProperty('--body-font-family', s.fontFamily);
   root.style.setProperty('--body-font-size', s.fontSize + 'px');
+  // v1.50.0: 根据背景明暗标 data-theme,供 CSS 区分浅/深模式(emoji 对比度)
+  const name = s.presetName || '';
+  const isDarkName = name.includes('深色') || name.includes('夜色');
+  // 兜底:按 fg/bg 亮度比判断(白底 → fg 深;暗底 → fg 亮)
+  const fgLum = lum(s.fgColor);
+  const bgLum = lum(s.bgColor);
+  const dark = isDarkName || fgLum > bgLum + 0.3;
+  root.setAttribute('data-theme', dark ? 'dark' : 'light');
+}
+
+/** 粗略计算 CSS 颜色亮度(hex/rgba) */
+function lum(c: string): number {
+  const m = c.match(/([\da-f]{2})[\da-f]{2}?/i);
+  if (m) {
+    const v = parseInt(m[1], 16) / 255;
+    return v;
+  }
+  const rgba = c.match(/rgba?\((\d+)/);
+  if (rgba) return parseInt(rgba[1], 10) / 255;
+  return 0.5;
 }

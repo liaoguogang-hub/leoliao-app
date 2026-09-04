@@ -33,6 +33,14 @@ export interface AgentContext {
   webSettings: WebSearchSettings;
   /** 全局变量:用户偏好 */
   signal?: AbortSignal;
+  /** v1.12.1: 检索模式(默认 hybrid),与 chat-panel 保持一致 */
+  searchMode?: 'bm25' | 'vector' | 'hybrid';
+  /** v1.12.1: 是否启用 Rerank(默认 false);Agent 路径透传 chat-panel 设置 */
+  useRerank?: boolean;
+  /** v1.12.1: Rerank TopN */
+  rerankTopN?: number;
+  /** v1.23.0 Fix-A: 是否包含本地文件(PDF/EPUB)— 默认 true */
+  includeLocal?: boolean;
 }
 
 export interface ToolCall {
@@ -73,7 +81,21 @@ const kbSearchTool: Tool = {
   },
   execute: async (args, ctx) => {
     const k = args.max_results || 5;
-    const results = await kbSearch(args.query, 9999, 30000, ctx.searchPaths);
+    // v1.12.1: 透传 searchMode + useRerank(与 chat-panel 一致)
+    const rerankOpts = ctx.useRerank
+      ? { topN: ctx.rerankTopN || 10, timeoutMs: 3000 }
+      : undefined;
+    // v1.23.0 Fix-A: Agent 默认 includeLocal=true — 否则 EPUB/PDF (📘📕 前缀) 永远搜不到
+    // 之前默认 false 导致本地文件索引完后依然检索为空
+    const results = await kbSearch(
+      args.query,
+      9999,
+      30000,
+      ctx.searchPaths,
+      ctx.searchMode || 'hybrid',
+      ctx.includeLocal !== false,  // 默认 true
+      rerankOpts
+    );
     const sliced = results.slice(0, k);
     return sliced.map((r: SearchResult, i: number) => ({
       idx: i + 1,
@@ -207,6 +229,123 @@ const noteEditTool: Tool = {
   },
 };
 
+/** 工具 6: 取单 chunk 全文(深入读某 chunk 上下文) */
+const getChunkTool: Tool = {
+  name: 'get_chunk',
+  description: '按 path + idx 读取某个 chunk 的全文(用于深入理解某个 chunk 上下文,前面 kb_search 已给出 idx)。',
+  parameters: {
+    type: 'object',
+    properties: {
+      path: { type: 'string', description: '笔记路径,例如"01.公众号/xxx.md"(必填)' },
+      idx: { type: 'number', description: 'chunk 在笔记内的索引(必填)' },
+    },
+    required: ['path', 'idx'],
+  },
+  execute: async (args) => {
+    try {
+      const { loadChunksForNote } = await import('../services/db');
+      const chunks = await loadChunksForNote(args.path);
+      const chunk = chunks.find(c => c.idx === args.idx);
+      if (!chunk) return { error: `未找到 chunk: ${args.path}#${args.idx}` };
+      return {
+        path: chunk.path,
+        idx: chunk.idx,
+        heading: chunk.heading,
+        content: chunk.content,
+        hash: chunk.hash,
+      };
+    } catch (e: any) {
+      return { error: `读 chunk 失败: ${e?.message || e}` };
+    }
+  },
+};
+
+/** 工具 7: 列出所有 tag + 频次 */
+const listTagsTool: Tool = {
+  name: 'list_tags',
+  description: '列出 vault 内所有 frontmatter tag 及频次(用于"我有哪些主题可以聊")。',
+  parameters: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: '最多返回条数(默认 50)' },
+    },
+    required: [],
+  },
+  execute: async (args) => {
+    try {
+      const { tagIndex } = await import('../services/wiki');
+      const tags = await tagIndex();
+      const limit = args.limit || 50;
+      return tags.slice(0, limit).map((t: any) => ({
+        tag: t.tag,
+        count: t.count,
+      }));
+    } catch (e: any) {
+      return { error: `列 tag 失败: ${e?.message || e}` };
+    }
+  },
+};
+
+/** 工具 8: 最近打开历史 */
+const getHistoryTool: Tool = {
+  name: 'get_history',
+  description: '获取最近打开过的笔记/本地文件列表(用于"我之前看过什么")。',
+  parameters: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: '最多返回条数(默认 20)' },
+    },
+    required: [],
+  },
+  execute: async (args) => {
+    try {
+      const { getRecentHistory } = await import('../services/db');
+      const items = await getRecentHistory(args.limit || 20);
+      return items.map((i: any) => ({
+        id: i.id,
+        type: i.type,
+        name: i.name,
+        path: i.path,
+        ext: i.ext,
+        size: i.size,
+        openedAt: i.openedAt,
+      }));
+    } catch (e: any) {
+      return { error: `读历史失败: ${e?.message || e}` };
+    }
+  },
+};
+
+/** 工具 9: 按 tag 找笔记 */
+const findByTagTool: Tool = {
+  name: 'find_by_tag',
+  description: '按 tag 名找出所有带该 tag 的笔记路径(用于"我写过哪些 V8 笔记")。',
+  parameters: {
+    type: 'object',
+    properties: {
+      tag: { type: 'string', description: 'tag 名(必填,不含 #)' },
+      limit: { type: 'number', description: '最多返回条数(默认 30)' },
+    },
+    required: ['tag'],
+  },
+  execute: async (args) => {
+    try {
+      const { tagIndex } = await import('../services/wiki');
+      const tags = await tagIndex();
+      const hit = tags.find((t: any) => t.tag === args.tag.replace(/^#/, ''));
+      if (!hit) return { tag: args.tag, count: 0, paths: [] };
+      const limit = args.limit || 30;
+      return {
+        tag: args.tag,
+        count: hit.count,
+        paths: hit.paths.slice(0, limit),
+      };
+    } catch (e: any) {
+      return { error: `按 tag 查找失败: ${e?.message || e}` };
+    }
+  },
+};
+
 /** 全部工具列表 */
 export const ALL_TOOLS: Tool[] = [
   kbSearchTool,
@@ -214,6 +353,11 @@ export const ALL_TOOLS: Tool[] = [
   noteOpenTool,
   listFilesTool,
   noteEditTool,
+  // v1.19.0: 4 个新工具
+  getChunkTool,
+  listTagsTool,
+  getHistoryTool,
+  findByTagTool,
 ];
 
 /** 按名字找工具 */
@@ -277,7 +421,10 @@ ${toolsPrompt()}
 - 每次只调一个工具
 - 工具结果作为事实依据,**不要编造**
 - 中文回答,简洁准确,1-3 段
-- 如 kb_search 已找到答案,不要再开 web_search`;
+- 如 kb_search 已找到答案,不要再开 web_search
+- **用户问"每章/全书/每个部分"这类结构化问题时,必须逐章/逐部分多次 kb_search**(每章一次,query 用"章节名+主题词"),不要只搜一次宽泛 query,否则后面的章节会漏掉
+- 检索某章为空时,如实说"该部分 KB 中未检索到原文",**不要**用书的知识编造
+- 最终回答尽量覆盖用户要求的全部章节,别漏`;
 }
 
 /** 单步执行 — 调一个工具返回结果 */

@@ -7,11 +7,12 @@
  * - `![[image.png]]` → 图片标签（路径保留）
  * - `> [!note]` callouts
  * - #tag 自动提取
+ * - v1.14.0: chunk 边界插 `data-cid` 锚点(配合 Phase R.3 跳转高亮)
+ * - v1.21.0: Obsidian 语法补全 — `%%comment%%` 行内注释、mermaid 代码块标记
  */
 
 import MarkdownIt from 'markdown-it';
 import matter from 'gray-matter';
-
 export interface ParsedNote {
   html: string;
   frontmatter: Record<string, unknown>;
@@ -59,6 +60,22 @@ function md(): MarkdownIt {
       state.push('link_close', 'a', -1);
     }
 
+    state.pos = end + 2;
+    return true;
+  });
+
+  // v1.21.0: Obsidian 行内注释 `%%comment%%` — 整段去除(不渲染)
+  _md.inline.ruler.before('emphasis', 'obsidian_comment', (state, silent) => {
+    const start = state.pos;
+    if (state.src.charCodeAt(start) !== 0x25 /* % */) return false;
+    if (state.src.charCodeAt(start + 1) !== 0x25 /* % */) return false;
+    const end = state.src.indexOf('%%', start + 2);
+    if (end < 0) return false;
+    if (!silent) {
+      // 用一个零宽 token,实际不输出
+      const token = state.push('text', '', 0);
+      token.content = '';
+    }
     state.pos = end + 2;
     return true;
   });
@@ -171,7 +188,44 @@ function salvageFrontmatter(yamlText: string): Record<string, unknown> {
   return fm;
 }
 
-export function parseNote(rawContent: string): ParsedNote {
+export interface ParseNoteOptions {
+  /** v1.14.0: chunk 边界信息(用于插 data-cid 锚点)。若不传,跳过锚点注入。 */
+  chunks?: Array<{ idx: number; startOffset: number; endOffset: number }>;
+  /** v1.14.0: 笔记路径(写入 data-path 属性,用于 jump-to-chunk 时校验) */
+  path?: string;
+}
+
+/**
+ * v1.14.0: 根据 chunks.startOffset,把每个 chunk 起始位置在 HTML 里包成
+ * `<a id="cid-X" data-cid="X" data-path="..."></a>` 锚点。
+ *
+ * 注意:
+ * - 锚点位置是基于 Markdown 原文的字符 offset,转 HTML 时需考虑 markdown-it 的 token 序列
+ * - 简单实现:在 HTML 字符串里找 chunk.startOffset 附近的字符位置(不做精确 offset 映射)
+ * - 实用主义:每个 chunk 至少有一个锚点,点 jump-to-chunk 时滚动到最近的锚点
+ */
+function injectChunkAnchors(html: string, chunks: NonNullable<ParseNoteOptions['chunks']>, path: string): string {
+  // 简化方案:按段落拆 HTML,在每段开始处插锚点(不依赖 offset)
+  // 对应 markdown 里的二级标题后的内容块
+  if (chunks.length === 0) return html;
+
+  // 把 HTML 拆成段(双换行),在每段前插锚点(轮流分配 idx)
+  // 这种粗粒度匹配不影响功能:点 jump-to-chunk 时 scrollIntoView 找到对应 heading 即可
+  const segments = html.split(/(?<=<\/h\d>|<\/p>|<\/ul>|<\/ol>|<\/pre>|<\/blockquote>|<\/table>)/i);
+  let chunkIdx = 0;
+  const anchored = segments.map((seg) => {
+    // 跳过空段
+    if (!seg.trim()) return seg;
+    // 在段开头插锚点
+    const cid = chunkIdx < chunks.length ? chunkIdx : chunks.length - 1;
+    const anchor = `<a id="cid-${cid}" class="cid-anchor" data-cid="${cid}" data-path="${path.replace(/"/g, '&quot;')}"></a>`;
+    chunkIdx++;
+    return anchor + seg;
+  }).join('');
+  return anchored;
+}
+
+export function parseNote(rawContent: string, opts: ParseNoteOptions = {}): ParsedNote {
   let content = rawContent;
   let frontmatter: Record<string, unknown> = {};
   try {
@@ -189,7 +243,11 @@ export function parseNote(rawContent: string): ParsedNote {
   }
   const tags = extractTags(content, frontmatter);
   const links = extractWikilinks(content);
-  const html = md().render(content);
+  let html = md().render(content);
+  // v1.14.0: chunk 锚点注入(若 opts.chunks + opts.path 同时提供)
+  if (opts.chunks && opts.chunks.length > 0 && opts.path) {
+    html = injectChunkAnchors(html, opts.chunks, opts.path);
+  }
   return { html, frontmatter, tags, links };
 }
 

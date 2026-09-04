@@ -14,6 +14,7 @@ import {
   loadAllChunkVectors, totalChunkVectors, saveChunkVectors,
   type ChunkVectorRow,
 } from '../services/db';
+import { rerank as doRerank, type RerankOptions } from './reranker';
 
 export type SearchMode = 'bm25' | 'vector' | 'hybrid';
 
@@ -90,6 +91,7 @@ function extractSnippet(content: string, qTokens: string[]): string {
 
 /**
  * 主入口 — V49: 混合检索(BM25 + 向量 + RRF 融合 + 本地文件支持)
+ *          v1.12.0 Phase R.1: 在 hybrid 路径末尾自动 rerank
  *
  * @param query  查询字符串
  * @param k      最大返回条数(默认 9999 = 全召回)
@@ -97,6 +99,8 @@ function extractSnippet(content: string, qTokens: string[]): string {
  * @param paths  可选 — 限定检索范围(文件夹前缀列表,空=全部 vault)
  * @param mode   检索模式:'bm25' | 'vector' | 'hybrid'(默认 hybrid)
  * @param includeLocal 是否包含本地文件(PDF 等,默认 false = 仅 vault)
+ * @param rerankOpts 可选 — 透传给 rerank() 的选项({ topN, timeoutMs, forceFallback, normalize })
+ *                     undefined = 不 rerank(向后兼容)
  */
 export async function search(
   query: string,
@@ -104,7 +108,8 @@ export async function search(
   maxChars = 30000,
   paths: string[] = [],
   mode: SearchMode = 'hybrid',
-  includeLocal = false
+  includeLocal = false,
+  rerankOpts?: RerankOptions
 ): Promise<SearchResult[]> {
   // 过滤掉 📕 本地文件路径(除非 includeLocal=true)
   const effectivePaths = includeLocal
@@ -112,7 +117,7 @@ export async function search(
     : paths.filter(p => !p.startsWith('📕') && !p.startsWith('📘'));
   if (mode === 'bm25') return searchBM25(query, k, maxChars, effectivePaths);
   if (mode === 'vector') return searchVector(query, k, maxChars, effectivePaths);
-  return searchHybrid(query, k, maxChars, effectivePaths);
+  return searchHybrid(query, k, maxChars, effectivePaths, rerankOpts);
 }
 
 /** V48: BM25 单跑 */
@@ -237,8 +242,16 @@ async function searchVector(query: string, k: number, maxChars: number, paths: s
   return results;
 }
 
-/** V48: 混合检索 — BM25 top50 + 向量 top50 → RRF 融合 */
-async function searchHybrid(query: string, k: number, maxChars: number, paths: string[]): Promise<SearchResult[]> {
+/** V48: 混合检索 — BM25 top50 + 向量 top50 → RRF 融合
+ *  v1.12.0 Phase R.1: 融合后可选 rerank(cross-encoder + BM25 fallback)
+ */
+async function searchHybrid(
+  query: string,
+  k: number,
+  maxChars: number,
+  paths: string[],
+  rerankOpts?: RerankOptions
+): Promise<SearchResult[]> {
   const [bm25Top, vecTop] = await Promise.all([
     searchBM25(query, 50, maxChars * 2, paths),
     searchVector(query, 50, maxChars * 2, paths),
@@ -257,6 +270,32 @@ async function searchHybrid(query: string, k: number, maxChars: number, paths: s
     if (out.length > 0 && totalChars + rChars > maxChars) break;
     out.push({ ...src, score: f.rrfScore });
     totalChars += rChars;
+  }
+
+  // v1.12.0 Phase R.1: 二次精排(可选)
+  if (rerankOpts && out.length > 1) {
+    try {
+      const reranked = await doRerank(query, out, {
+        // rerank 默认 topN = caller 期望的 k(取 fused 后 topK)
+        topN: Math.min(out.length, k),
+        timeoutMs: 3000,
+        normalize: true,
+        ...rerankOpts,
+      });
+      // rerank 不破坏 maxChars 安全阀 — 截断到原字符预算
+      const limited: SearchResult[] = [];
+      let acc = 0;
+      for (const r of reranked) {
+        const rChars = r.snippet.length + r.title.length + r.path.length + r.heading.length + 50;
+        if (limited.length > 0 && acc + rChars > maxChars) break;
+        limited.push(r);
+        acc += rChars;
+      }
+      return limited;
+    } catch (e) {
+      console.warn('[search] rerank failed, returning fused results:', e);
+      return out;
+    }
   }
   return out;
 }
@@ -293,9 +332,13 @@ export async function vectorIndexStatus(): Promise<{ total: number; chunks: numb
 /** 把检索结果组装成 RAG 用的 system + user prompt(V44:含 heading 上下文) */
 export function buildRAGPrompt(query: string, results: SearchResult[]): { system: string; user: string } {
   if (results.length === 0) {
+    // v1.27.0: 严格 RAG — 不用训练知识,直接告诉用户没找到
     return {
-      system: '你是 LeoLiao 知识库助手。',
-      user: `【问题】\n${query}\n\n【知识库检索结果】\n（无 — 知识库内未找到相关内容）`,
+      system: '你是 LeoLiao 知识库助手。**严禁**用自己的训练知识回答。\n' +
+              '如果知识库内未找到相关内容,**必须**直接告诉用户:\n' +
+              '"知识库内未找到相关信息,请把相关材料放进 vault 后再问。"\n' +
+              '**不要**编造或推测任何内容。',
+      user: `【问题】\n${query}\n\n【知识库检索结果】\n(无 — 知识库内未找到相关内容)\n\n请严格按 system 规则回答。`,
     };
   }
   const ctx = results
@@ -307,11 +350,12 @@ export function buildRAGPrompt(query: string, results: SearchResult[]): { system
 
   const system = `你是 LeoLiao 知识库助手。基于下面【知识库检索结果】回答用户问题。
 规则:
-1. 优先使用 [#1][#2]... 引用的内容回答
-2. 如果检索结果不包含答案,明确说"知识库内未找到相关信息",不要编造
-3. 回答末尾用"参考来源: [[#1]] [[#2]]..."格式列出引用
-4. 简洁,1-3 段,不要长篇大论
-5. 用户用中文就回中文,英文就回英文`;
+1. **优先**使用 [#1][#2]... 引用的内容回答 — 引用原文是唯一事实依据
+2. 如果检索结果不包含答案,**必须**明确说"知识库内未找到相关信息",**严禁**用训练知识编造或推测
+3. 如果用户问"每章主要内容"等结构化问题,只回答检索到内容的章节,其他章节明确标"KB 无原文"
+4. 回答末尾用"参考来源: [[#1]] [[#2]]..."格式列出引用
+5. 简洁,1-3 段,不要长篇大论
+6. 用户用中文就回中文,英文就回英文`;
 
   const user = `【问题】\n${query}\n\n【知识库检索结果】\n${ctx}`;
 
@@ -349,22 +393,27 @@ export function buildFullRAGPrompt(
   if (webResults.length > 0) sourcesDesc.push('联网 [Web#1] [Web#2]...');
 
   if (kbResults.length === 0 && webResults.length === 0) {
+    // v1.27.0: 严格 RAG 模式 — 不再用训练知识回答
     return {
-      system: '直接回答用户问题。不要模拟 KB 检索、网页搜索或任何检索过程。' +
-              '不要使用 [KB#1]、[Web#1]、[1]、[2] 等引用标签。' +
-              '不要输出"Let me check..."、"Looking at..."、"检索结果"等中间思考过程。' +
-              '直接给出最终答案。',
-      user: query,
+      system: '你是 LeoLiao 知识库助手。**严禁**用自己的训练知识回答。\n' +
+              '如果知识库和联网搜索都没有相关材料,**必须**明确告诉用户:\n' +
+              '"知识库和联网搜索都未找到相关信息,请把相关材料放进 vault 后再问。"\n' +
+              '**不要**输出"Let me check..."、"Looking at..."、"根据我的了解"等任何假装在思考的过渡。\n' +
+              '**不要**模拟 KB 检索或网页搜索过程。\n' +
+              '**不要**使用 [KB#1]、[Web#1]、[1]、[2] 等引用标签。\n' +
+              '直接告诉用户"未找到"。',
+      user: `【问题】\n${query}\n\n【知识库检索结果】\n(无 — 知识库内未找到相关内容)\n\n【联网搜索结果】\n(无 — 未配置或失败)\n\n请严格按 system 规则回答。`,
     };
   }
 
   const system = `你是 LeoLiao 知识库助手。基于下面检索结果回答用户问题。
 规则:
-1. 优先使用检索结果回答（${sourcesDesc.join(' / ')}）
-2. 如果所有检索结果都不含答案,明确说"未找到相关信息",不要编造
-3. 回答末尾用"参考来源: [KB#1] [Web#2]..."格式列出引用
-4. 简洁,1-3 段,不要长篇大论
-5. 用户用中文就回中文,英文就回英文`;
+1. **优先**使用检索结果回答（${sourcesDesc.join(' / ')}） — 检索结果中的原文是唯一事实依据
+2. 如果所有检索结果都不含答案,**必须**明确说"未找到相关信息",**严禁**用训练知识编造或推测
+3. 如果用户问"每章主要内容"等结构化问题,只回答检索到内容的章节,其他章节明确标"KB 无原文"
+4. 回答末尾用"参考来源: [KB#1] [Web#2]..."格式列出引用
+5. 简洁,1-3 段,不要长篇大论
+6. 用户用中文就回中文,英文就回英文`;
 
   const user = `【问题】\n${query}\n\n${parts.join('\n\n')}`;
 

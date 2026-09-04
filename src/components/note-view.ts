@@ -45,16 +45,20 @@ export class LlNoteView extends LitElement {
     super.connectedCallback();
     // 用 capture 抓住所有 main scroll(包括工具按钮触发的 scrollIntoView)
     document.addEventListener('scroll', this.scrollHandler, { capture: true, passive: true });
+    // v1.14.0: 监听外部 jump-to-chunk 事件(从 chat 引用 / 搜索结果点击触发)
+    document.addEventListener('ll-jump-to-chunk', this.handleJumpToChunk as EventListener);
   }
   disconnectedCallback() {
     super.disconnectedCallback();
     document.removeEventListener('scroll', this.scrollHandler, { capture: true } as any);
+    document.removeEventListener('ll-jump-to-chunk', this.handleJumpToChunk as EventListener);
   }
 
   /** V47: note 变化时重新加载反向链接 */
   updated(changed: Map<string, unknown>) {
     if (changed.has('note') && this.note && !this.editing) {
       this.loadBackLinks(this.note.path);
+      this.loadMoc(this.note.path);  // v1.17.0
       // V52.11: 新笔记加载后重置阅读比例,等用户滚动再记录
       this.readRatio = 0;
     }
@@ -69,6 +73,53 @@ export class LlNoteView extends LitElement {
     }
   }
 
+  // v1.17.0: Wiki MOC 加载
+  private async loadMoc(path: string) {
+    try {
+      const { generateNoteMoc } = await import('../services/wiki-auto');
+      this.moc = await generateNoteMoc(path);
+    } catch (e) {
+      console.warn('[note-view] loadMoc failed', e);
+      this.moc = null;
+    }
+  }
+
+  // v1.14.0: 高亮闪烁定时器
+  private highlightTimer: number | null = null;
+
+  /**
+   * v1.14.0: 外部跳转到指定 chunk 并高亮 3 秒
+   * 事件 detail: { path: string; idx: number }
+   * 注意:path 校验,只处理当前打开笔记的 idx
+   */
+  private handleJumpToChunk = (e: CustomEvent<{ path: string; idx: number }>) => {
+    if (!e.detail) return;
+    const { path, idx } = e.detail;
+    // 只处理当前笔记的跳转请求
+    if (this.note && path !== this.note.path) {
+      console.warn(`[note-view] jump-to-chunk: path mismatch (${path} vs ${this.note.path}), ignored`);
+      return;
+    }
+    // 等渲染稳定(锚点是渲染后才插入的)
+    this.updateComplete.then(() => {
+      const anchor = this.querySelector(`a.cid-anchor[data-cid="${idx}"]`) as HTMLElement | null;
+      if (!anchor) {
+        console.warn(`[note-view] jump-to-chunk: anchor #cid-${idx} not found`);
+        return;
+      }
+      // 滚动到锚点(把 main 也滚了)
+      anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // 添加高亮 class,3 秒后移除
+      anchor.classList.add('highlight-flash');
+      if (this.highlightTimer !== null) {
+        clearTimeout(this.highlightTimer);
+      }
+      this.highlightTimer = window.setTimeout(() => {
+        anchor.classList.remove('highlight-flash');
+        this.highlightTimer = null;
+      }, 3000);
+    });
+  };
   @property({ type: Object }) note: NoteFile | null = null;
   /** V43: edit 模式显示 textarea,否则渲染 markdown */
   @state() private editing = false;
@@ -78,6 +129,8 @@ export class LlNoteView extends LitElement {
   @state() private saveStatus: boolean | undefined = undefined;
   /** V47: 反向链接(此笔记被哪些笔记引用) */
   @state() private backLinks: BackLink[] = [];
+  // v1.17.0: Wiki MOC
+  @state() private moc: import('../services/wiki-auto').NoteMoc | null = null;
 
   private onLinkClick(e: MouseEvent, href: string) {
     if (href.startsWith('#wiki:')) {
@@ -308,6 +361,43 @@ export class LlNoteView extends LitElement {
             </div>
           </footer>
         ` : null}
+
+        <!-- v1.17.0: Wiki MOC(同 tag + 上层 + 下游) -->
+        ${this.moc && !this.editing && (this.moc.sameTag.length > 0 || this.moc.parents.length > 0 || this.moc.downstream.length > 0) ? html`
+          <footer class="note-footer moc-footer">
+            <div class="links-title">📑 Wiki MOC</div>
+            ${this.moc.parents.length > 0 ? html`
+              <div class="moc-section">
+                <span class="moc-label">📁 同目录 (${this.moc.parents.length}):</span>
+                <div class="links">
+                  ${this.moc.parents.slice(0, 10).map(p => html`
+                    <span class="link-ref moc-parent" @click=${() => this.dispatchEvent(new CustomEvent('wikilink', { detail: p.path, bubbles: true, composed: true }))}>${p.title}</span>
+                  `)}
+                </div>
+              </div>
+            ` : nothing}
+            ${this.moc.downstream.length > 0 ? html`
+              <div class="moc-section">
+                <span class="moc-label">🔄 双向引用 (${this.moc.downstream.length}):</span>
+                <div class="links">
+                  ${this.moc.downstream.slice(0, 10).map(p => html`
+                    <span class="link-ref moc-downstream" @click=${() => this.dispatchEvent(new CustomEvent('wikilink', { detail: p.path, bubbles: true, composed: true }))}>${p.title}</span>
+                  `)}
+                </div>
+              </div>
+            ` : nothing}
+            ${this.moc.sameTag.length > 0 ? html`
+              <div class="moc-section">
+                <span class="moc-label">🏷 同 tag (${this.moc.sameTag.length}):</span>
+                <div class="links">
+                  ${this.moc.sameTag.slice(0, 10).map(p => html`
+                    <span class="link-ref moc-sametag" title="#${p.tag}" @click=${() => this.dispatchEvent(new CustomEvent('wikilink', { detail: p.path, bubbles: true, composed: true }))}>${p.title}</span>
+                  `)}
+                </div>
+              </div>
+            ` : nothing}
+          </footer>
+        ` : nothing}
       </article>
     `;
   }

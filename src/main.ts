@@ -12,7 +12,10 @@ import './components/file-viewer';
 import './components/history-panel';
 import './components/chat-panel';
 import './components/wiki-panel';
+import './components/graph-view';
+import './components/search-results';
 import type { ManifestEntry, NoteFile, SyncStatus } from './types';
+import type { SearchMode, SearchResult } from './lib/search';
 import { sync as doSync, getNote } from './services/sync';
 import { cacheStats, addHistory } from './services/db';
 import { loadSettings, applySettings, type ThemeSettings } from './services/settings';
@@ -29,6 +32,15 @@ export class LlApp extends LitElement {
   @state() private allEntries: ManifestEntry[] = [];
   @state() private searchTerm = '';
   @state() private selectedPath = '';
+  // v1.13.0: 三 Tab 搜索 state
+  /** 当前 Tab:path / fulltext / semantic */
+  @state() private sidebarTab: 'path' | 'fulltext' | 'semantic' = 'path';
+  /** 全文/语义模式的检索结果(SearchResult[])— 防抖后异步填充 */
+  @state() private semanticResults: SearchResult[] = [];
+  /** 检索中状态(true 显示 loading) */
+  @state() private semanticLoading = false;
+  /** Rerank 开关(v1.12.1)— 全文/语义模式共用 */
+  @state() private useRerank = false;
   @state() private currentNote: NoteFile | null = null;
   @state() private stats = { manifestCount: 0, noteCount: 0, totalSize: 0 };
   @state() private errorMsg = '';
@@ -51,6 +63,8 @@ export class LlApp extends LitElement {
   @state() private actionTarget: { path: string; isDir: boolean; name: string } | null = null;
   // V47: Wiki 主页
   @state() private showWiki = false;
+  // v1.18.0: 知识图谱
+  @state() private showGraph = false;
   // V29: 主题设置
   @state() private theme: ThemeSettings = loadSettings();
   // V38: 开机欢迎图
@@ -59,6 +73,15 @@ export class LlApp extends LitElement {
   // V39: 阅读进度
   @state() private readProgress = 0;        // 0-100
   @state() private readProgressVisible = false;
+  // v1.13.0: Tab/Rerank 持久化
+  private persistSidebarUI() {
+    try {
+      localStorage.setItem('ll-sidebar-ui', JSON.stringify({
+        sidebarTab: this.sidebarTab,
+        useRerank: this.useRerank,
+      }));
+    } catch { /* 静默 */ }
+  }
 
   async connectedCallback() {
     super.connectedCallback();
@@ -68,8 +91,44 @@ export class LlApp extends LitElement {
     // V29: 应用主题 + 绑 ESC 键
     applySettings(this.theme);
     document.addEventListener('keydown', this.handleKeydown);
+    // v1.13.0: 恢复侧栏 UI 偏好(Tab/Rerank)
+    try {
+      const ui = JSON.parse(localStorage.getItem('ll-sidebar-ui') || '{}');
+      if (typeof ui.useRerank === 'boolean') this.useRerank = ui.useRerank;
+      if (ui.sidebarTab === 'path' || ui.sidebarTab === 'fulltext' || ui.sidebarTab === 'semantic') {
+        this.sidebarTab = ui.sidebarTab;
+      }
+    } catch { /* 默认值 */ }
     this.showWelcomeScreen();   // V38: 与同步并行,不阻塞
-    await this.runSync();
+    // v1.33.0: 5 分钟内已成功同步过就跳过(避免每次打开都重新拉 OSS)
+    const lastSync = parseInt(localStorage.getItem('ll-last-sync') || '0', 10);
+    const sinceMs = Date.now() - lastSync;
+    if (lastSync && sinceMs < 5 * 60 * 1000) {
+      console.log(`[知识库] 上次同步 ${Math.round(sinceMs / 1000)}s 前,跳过全量拉取`);
+      // 只从 IndexedDB 加载已有缓存(超快)
+      try {
+        const { loadManifest } = await import('./services/db');
+        const cached = await loadManifest();
+        if (cached && cached.length > 0) {
+          this.allEntries = cached;
+          await this.loadLocalNotes();
+          this.stats = await cacheStats();
+          this.status = 'ready';
+        } else {
+          // 没缓存 → 必须同步
+          console.log('[知识库] 缓存为空,执行全量同步');
+          await this.runSync();
+          localStorage.setItem('ll-last-sync', String(Date.now()));
+        }
+      } catch (e) {
+        console.warn('[知识库] 缓存加载失败,fallback 全量同步:', e);
+        await this.runSync();
+        localStorage.setItem('ll-last-sync', String(Date.now()));
+      }
+    } else {
+      await this.runSync();
+      localStorage.setItem('ll-last-sync', String(Date.now()));
+    }
   }
 
   /** V38: 开机欢迎页 — 缓存优先(离线秒显),首次无缓存则快速下一张;后台刷新缓存 */
@@ -421,11 +480,22 @@ export class LlApp extends LitElement {
 
         // V52: 等 PDF/EPUB 后台索引完成 → 刷新文件树本地 notes 缓存,
         // 让搜索框能立刻搜到刚生成的 📕/📘 xxx.md(不用等 sync/重启)
-        // 非 PDF/EPUB 文件 indexingDone 不存在,跳过即可
+        // v1.23.0 Fix-F: 索引完成 toast 提示 + 自动 reload 笔记列表
         if ((file as any).indexingDone) {
+          this.noticeMsg = `📥 正在索引 ${file.name}...`;
           (file as any).indexingDone
-            .then(() => this.loadLocalNotes())
-            .catch((err: any) => console.warn('[openLocalFile] indexingDone:', err));
+            .then(() => {
+              this.loadLocalNotes();
+              // 提示用户索引完成,可被检索
+              const isEbook = file.ext === 'pdf' || file.ext === 'epub';
+              this.noticeMsg = `✅ ${file.name} 已索引完成${isEbook ? ' - 现在可在 chat 中检索' : ''}`;
+              this.scheduleNoticeAutoHide();
+            })
+            .catch((err: any) => {
+              console.warn('[openLocalFile] indexingDone:', err);
+              this.noticeMsg = `⚠️ ${file.name} 索引失败(可在 logcat 看原因)`;
+              this.scheduleNoticeAutoHide();
+            });
         }
       }
     } catch (e: any) {
@@ -483,13 +553,24 @@ export class LlApp extends LitElement {
     }
   }
 
-  private async handleSelectDirect(path: string) {
+  private async handleSelectDirect(path: string, idx?: number) {
     this.errorMsg = '';
     try {
       await this.openNote(path);
+      // v1.14.0: 如果传了 idx,触发 jump-to-chunk 事件让 note-view 跳转+高亮
+      if (idx !== undefined) {
+        this.dispatchJumpToChunk(path, idx);
+      }
     } catch (e) {
       this.errorMsg = (e as Error).message;
     }
+  }
+
+  /** v1.14.0: 派发全局 jump-to-chunk 事件(注:note-view 用 document 监听) */
+  private dispatchJumpToChunk(path: string, idx: number) {
+    document.dispatchEvent(new CustomEvent('ll-jump-to-chunk', {
+      detail: { path, idx },
+    }));
   }
 
   private async handleSelect(e: Event) {
@@ -564,6 +645,49 @@ export class LlApp extends LitElement {
   private onSearch(e: Event) {
     const q = (e.target as HTMLInputElement).value.toLowerCase().trim();
     this.searchTerm = q;
+    // v1.13.0: 全文/语义 Tab 时,触发防抖检索
+    if (this.sidebarTab !== 'path') {
+      this.scheduleSemanticSearch(q);
+    }
+  }
+
+  // v1.13.0: 防抖定时器(全文/语义检索)
+  private semanticDebounce: number | null = null;
+
+  /** 200ms 防抖后跑全文/语义检索 */
+  private scheduleSemanticSearch(q: string) {
+    if (this.semanticDebounce !== null) {
+      clearTimeout(this.semanticDebounce);
+    }
+    if (!q) {
+      this.semanticResults = [];
+      this.semanticLoading = false;
+      return;
+    }
+    this.semanticLoading = true;
+    this.semanticDebounce = window.setTimeout(async () => {
+      try {
+        const { search } = await import('./lib/search');
+        const mode: SearchMode = this.sidebarTab === 'fulltext' ? 'bm25' : 'hybrid';
+        const rerankOpts = this.useRerank ? { topN: 10, timeoutMs: 3000 } : undefined;
+        this.semanticResults = await search(q, 30, 12000, [], mode, false, rerankOpts);
+      } catch (e) {
+        console.warn('[main] semantic search failed:', e);
+        this.semanticResults = [];
+      } finally {
+        this.semanticLoading = false;
+      }
+    }, 200);
+  }
+
+  /** v1.13.0: 切换 Tab */
+  private setSidebarTab(tab: 'path' | 'fulltext' | 'semantic') {
+    this.sidebarTab = tab;
+    if (tab !== 'path' && this.searchTerm) {
+      this.scheduleSemanticSearch(this.searchTerm);
+    } else if (tab === 'path') {
+      this.semanticResults = [];
+    }
   }
 
   private get displayEntries(): ManifestEntry[] {
@@ -635,6 +759,19 @@ export class LlApp extends LitElement {
       } else if (this.sidebarOpen) {
         this.sidebarOpen = false;
       }
+      return;
+    }
+    // v1.13.0: Cmd/Ctrl + K 聚焦搜索框
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      this.sidebarOpen = true;
+      requestAnimationFrame(() => {
+        const el = this.querySelector('.search') as HTMLInputElement | null;
+        if (el) {
+          el.focus();
+          el.select();
+        }
+      });
     }
   };
 
@@ -672,13 +809,35 @@ export class LlApp extends LitElement {
             <input
               type="search"
               class="search"
-              placeholder="🔍 搜索路径..."
+              placeholder=${this.sidebarTab === 'path' ? '🔍 搜索路径...'
+                : this.sidebarTab === 'fulltext' ? '🔍 全文搜索 chunks...'
+                : '🧠 语义搜索(自然语言问句)...'}
               .value=${this.searchTerm}
               @input=${this.onSearch}
               @search=${this.onSearch}
               @change=${this.onSearch}
               @keyup=${this.onSearch}
             />
+            <!-- v1.13.0: 三 Tab 切换 -->
+            <div class="search-tabs" role="tablist">
+              <button class="search-tab ${this.sidebarTab === 'path' ? 'active' : ''}"
+                role="tab" @click=${() => this.setSidebarTab('path')}
+                title="按文件路径匹配(最快)">📂 路径</button>
+              <button class="search-tab ${this.sidebarTab === 'fulltext' ? 'active' : ''}"
+                role="tab" @click=${() => this.setSidebarTab('fulltext')}
+                title="按 chunk 内容 BM25 匹配">📖 全文</button>
+              <button class="search-tab ${this.sidebarTab === 'semantic' ? 'active' : ''}"
+                role="tab" @click=${() => this.setSidebarTab('semantic')}
+                title="BM25 + 向量 + RRF 混合">🧠 语义</button>
+            </div>
+            <!-- v1.13.0: Rerank 开关(全文/语义 Tab 时显示) -->
+            ${this.sidebarTab !== 'path' ? html`
+              <label class="rerank-toggle">
+                <input type="checkbox" ?checked=${this.useRerank}
+                  @change=${(e: Event) => { this.useRerank = (e.target as HTMLInputElement).checked; this.persistSidebarUI(); if (this.searchTerm) this.scheduleSemanticSearch(this.searchTerm); }} />
+                🎯 Rerank
+              </label>
+            ` : null}
             ${this.syncStatus ? html`
               <div class="sync-info">
                 <span class="dot ${this.syncStatus.source}"></span>
@@ -687,13 +846,24 @@ export class LlApp extends LitElement {
               </div>
             ` : null}
           </div>
-          <ll-file-tree
-            .entries=${entries}
-            .selectedPath=${this.selectedPath}
-            .searchTerm=${this.searchTerm}
-            .onNoteOpen=${(p: string) => this.handleSelectDirect(p)}
-            @node-action=${(e: CustomEvent) => this.onNodeAction(e)}
-          ></ll-file-tree>
+          <!-- v1.13.0: 根据 tab 分发三种视图 -->
+          ${this.sidebarTab === 'path' ? html`
+            <ll-file-tree
+              .entries=${entries}
+              .selectedPath=${this.selectedPath}
+              .searchTerm=${this.searchTerm}
+              .onNoteOpen=${(p: string) => this.handleSelectDirect(p)}
+              @node-action=${(e: CustomEvent) => this.onNodeAction(e)}
+            ></ll-file-tree>
+          ` : html`
+            <ll-search-results
+              .results=${this.semanticResults}
+              .loading=${this.semanticLoading}
+              .query=${this.searchTerm}
+              .selectedPath=${this.selectedPath}
+              .onNoteOpen=${(p: string, idx?: number) => this.handleSelectDirect(p, idx)}
+            ></ll-search-results>
+          `}
           <div class="sidebar-footer">
             <button @click=${() => this.runSync()}>
               ${this.status === 'syncing' ? '⏳ 同步中' : '🔄 重新同步'}
@@ -716,10 +886,21 @@ export class LlApp extends LitElement {
               <button class="toolbar-btn" title="打开本地文件(md/html/txt/图片/docx/pdf/epub)" @click=${() => this.openLocalFile()} ?disabled=${this.openingFile}>
                 ${this.openingFile ? '⏳' : '📂'}
               </button>
-              <!-- V43: 新建笔记 -->
-              <button class="toolbar-btn" title="新建笔记" @click=${() => { this.actionTarget = { path: '', isDir: false, name: '' }; this.showNewNote = true; this.showSettings = false; this.showShare = false; this.showHelp = false; }}>➕</button>
+              <!-- V43: 新建笔记 — v1.51: SVG 加号(emoji ➕ 是深色字形,深色模式看不清) -->
+              <button class="toolbar-btn" title="新建笔记" @click=${() => { this.actionTarget = { path: '', isDir: false, name: '' }; this.showNewNote = true; this.showSettings = false; this.showShare = false; this.showHelp = false; }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
               <!-- V47: Wiki 主页 -->
               <button class="toolbar-btn" title="Wiki 主页" @click=${() => { this.showWiki = true; this.showSettings = false; this.showShare = false; this.showHelp = false; }}>📖</button>
+              <!-- v1.18.0: 关系列表 — v1.51: SVG 网状图(emoji 🕸 深色模式看不清) -->
+              <button class="toolbar-btn" title="关系列表(原知识图谱)" @click=${() => { this.showGraph = true; this.showSettings = false; this.showShare = false; this.showHelp = false; }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                  <circle cx="12" cy="5" r="2.4"/>
+                  <circle cx="4.5" cy="18" r="2.4"/>
+                  <circle cx="19.5" cy="18" r="2.4"/>
+                  <path d="M10.8 6.6 5.8 16M13.2 6.6 18.2 16M6.2 18h11.6"/>
+                </svg>
+              </button>
               <!-- V39: 历史记录 -->
               <button class="toolbar-btn" title="历史打开过的笔记/文件" @click=${() => this.showHistory = true}>🕘</button>
               <button class="toolbar-btn" title="本地参考库 (PDF / EPUB)" @click=${() => this.showLocalFiles = true}>📚</button>
@@ -834,11 +1015,20 @@ export class LlApp extends LitElement {
           ></ll-wiki-panel>
         ` : null}
 
+        ${this.showGraph ? html`
+          <ll-graph-view
+            .open=${this.showGraph}
+            @close=${() => this.showGraph = false}
+            @open-note=${(e: CustomEvent<string>) => { this.showGraph = false; this.handleHistoryOpenNote(e); }}
+          ></ll-graph-view>
+        ` : null}
+
         ${this.renderActionModal()}
 
-        <!-- AI 对话面板 — FAB + 弹窗；引用点击触发打开对应笔记 -->
+        <!-- AI 对话面板 — FAB + 弹窗；引用点击触发打开对应笔记(v1.14.0: 带 idx 跳转+高亮) -->
         <ll-chat-panel
-          @open-citation=${(e: CustomEvent<string>) => this.handleSelectDirect(e.detail)}
+          .currentNotePath=${this.currentNote?.path || ''}
+          @open-citation=${(e: CustomEvent<{ path: string; idx?: number }>) => this.handleSelectDirect(e.detail.path, e.detail.idx)}
         ></ll-chat-panel>
 
       </div>

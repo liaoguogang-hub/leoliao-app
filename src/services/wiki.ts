@@ -10,7 +10,29 @@
  */
 
 import { db } from './db';
-import { parseNote } from './renderer';
+
+/** v1.48.0: 轻量 frontmatter tags 提取(不跑完整 markdown-it,只正则取 --- 块里的 tags/tag)
+ *  大幅提速 vaultStats / tagIndex(1200 篇不再逐个 parseNote) */
+function extractTagsQuick(content: string): string[] {
+  const m = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return [];
+  const fm = m[1];
+  // tags: [a, b] 或 tag: x
+  const tags: string[] = [];
+  const arr = fm.match(/^tags:\s*\[([^\]]*)\]/m);
+  if (arr) {
+    for (const t of arr[1].split(',')) {
+      const v = t.trim().replace(/^['"]|['"]$/g, '').replace(/^#/, '');
+      if (v) tags.push(v);
+    }
+  }
+  const one = fm.match(/^tag:\s*(.+)$/m);
+  if (one) {
+    const v = one[1].trim().replace(/^['"]|['"]$/g, '').replace(/^#/, '');
+    if (v) tags.push(v);
+  }
+  return tags;
+}
 
 export interface BackLink {
   /** 来源笔记路径(被找反向链接的笔记) */
@@ -86,13 +108,12 @@ export async function backlinks(targetPath: string): Promise<BackLink[]> {
   return out;
 }
 
-/** 按 tag 分组(从 frontmatter.tags) */
+/** 按 tag 分组(从 frontmatter.tags) — v1.48.0 用轻量提取,不再 parseNote */
 export async function tagIndex(): Promise<TagIndex[]> {
   const all = await db().notes.toArray();
   const map = new Map<string, string[]>();
   for (const n of all) {
-    const { frontmatter } = parseNote(n.content);
-    const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags.map(String) : [];
+    const tags = extractTagsQuick(n.content);
     for (const t of tags) {
       if (!t) continue;
       if (!map.has(t)) map.set(t, []);
@@ -126,12 +147,11 @@ export async function vaultStats(): Promise<VaultStats> {
     const parts = n.path.split('/');
     for (let i = 1; i < parts.length; i++) folders.add(parts.slice(0, i).join('/'));
   }
-  // tag 数
+  // tag 数(v1.48: 轻量提取)
   const tagSet = new Set<string>();
   for (const n of all) {
-    const { frontmatter } = parseNote(n.content);
-    const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags : [];
-    for (const t of tags) tagSet.add(String(t));
+    const tags = extractTagsQuick(n.content);
+    for (const t of tags) tagSet.add(t);
   }
   const totalSize = all.reduce((s, n) => s + n.content.length, 0);
   const avgNoteSize = all.length === 0 ? 0 : Math.round(totalSize / all.length);
