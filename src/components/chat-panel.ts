@@ -205,12 +205,14 @@ export class LlChatPanel extends LitElement {
         !this.settings.baseUrl ||
         baseUrlMatchesPrevDefault ||
         (defaults.defaultBaseUrl && !this.settings.baseUrl.startsWith('http'));
-      const modelNotInList = defaults.models.length > 0 && !defaults.models.includes(this.settings.model);
+      const modelNotInList = (defaults.suggestedModels ?? defaults.models ?? []).length > 0
+        && !(defaults.suggestedModels ?? defaults.models ?? []).includes(this.settings.model);
       if (baseUrlLooksBroken || modelNotInList) {
+        const list = defaults.suggestedModels ?? defaults.models ?? [];
         this.settings = {
           ...this.settings,
           baseUrl: defaults.defaultBaseUrl || this.settings.baseUrl,
-          model: defaults.models.length > 0 ? defaults.models[0] : this.settings.model,
+          model: list.length > 0 ? list[0] : this.settings.model,
         };
         saveLLMSettings(this.settings);
       }
@@ -944,14 +946,27 @@ export class LlChatPanel extends LitElement {
 
         <div class="setting-row">
           <label>模型</label>
-          ${provider.models.length > 0 ? html`
-            <select style="flex:1" @change=${(e: Event) => { this.settings = { ...s, model: (e.target as HTMLSelectElement).value }; this.persistSettings(); }}>
-              ${provider.models.map(m => html`<option value=${m} ?selected=${s.model === m || (!provider.models.includes(s.model) && m === provider.models[0])}>${m}</option>`)}
-            </select>
-          ` : html`
-            <input type="text" .value=${s.model} placeholder="模型名称"
-              @input=${(e: Event) => { this.settings = { ...s, model: (e.target as HTMLInputElement).value }; this.persistSettings(); }} />
-          `}
+          ${(() => {
+            const modelList = provider.suggestedModels ?? provider.models ?? [];
+            const modelInputId = `model-input-${provider.id}`;
+            // v1.52.0: datalist 自动补全 + input 可手输任意模型名(支持自定义)
+            return html`
+              <input
+                type="text"
+                id=${modelInputId}
+                style="flex:1"
+                list=${modelList.length > 0 ? `model-suggestions-${provider.id}` : ''}
+                .value=${s.model}
+                placeholder=${provider.defaultModel || '模型名称'}
+                @input=${(e: Event) => { this.settings = { ...s, model: (e.target as HTMLInputElement).value }; this.persistSettings(); }}
+              />
+              ${modelList.length > 0 ? html`
+                <datalist id="model-suggestions-${provider.id}">
+                  ${modelList.map(m => html`<option value=${m}></option>`)}
+                </datalist>
+              ` : ''}
+            `;
+          })()}
         </div>
 
         <div class="setting-row">
