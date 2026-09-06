@@ -952,6 +952,7 @@ code.language-mermaid::before {
 
 .main {
   overflow-y: auto;
+  overflow-x: hidden;   /* v1.53: 锁死整体横向滚动,只允许上下 */
   padding: 0;
   background: var(--bg);
 }
@@ -1084,7 +1085,7 @@ code.language-mermaid::before {
   justify-content: flex-end;
   align-items: center;
   padding: 8px 16px;
-  background: var(--bg-2);
+  background: rgba(20, 42, 62, 0.6);   /* v1.55: 半透明,避免遮 .pct 阅读进度标签 */
   border-bottom: 1px solid var(--border);
   /* V52.10: 负 margin-top 抵消 .main-content padding-top (mobile 12 / desktop 16),
    * 让初始 scrollTop=0 时 actions 紧贴 .toolbar bottom (gap=0),
@@ -1574,16 +1575,16 @@ code.language-mermaid::before {
   }
 }
 
-/* === V39: 阅读进度条(右侧垂直) === */
+/* === V39: 阅读进度条(右侧垂直) — v1.53: z-index 6 盖住 .note-actions(4),top 56 贴工具栏下方,避免与编辑按钮重叠 */
 .read-progress {
   position: fixed;
   right: 6px;
-  top: 70px;
+  top: 56px;
   bottom: 6px;
   width: 4px;
   background: rgba(0, 0, 0, 0.08);
   border-radius: 2px;
-  z-index: 4;
+  z-index: 6;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.2s;
@@ -1600,7 +1601,8 @@ code.language-mermaid::before {
 }
 .read-progress .pct {
   position: absolute;
-  right: 10px;
+  top: 0;              /* v1.56: 改回容器顶,显示在 .note-actions 色块之上(z-index 7 > 4) */
+  right: 0;
   transform: translateY(-50%);
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -1611,6 +1613,7 @@ code.language-mermaid::before {
   border-radius: 3px;
   pointer-events: none;
   white-space: nowrap;
+  z-index: 7;
 }
 @media (max-width: 720px) {
   .read-progress {
@@ -2148,6 +2151,33 @@ code.language-mermaid::before {
   .read-progress { right: 4px; width: 3px; }
   .read-progress .pct { font-size: 10px; padding: 1px 4px; right: 7px; }
 }
+
+/* v1.57: % 标签独立 fixed,高对比 accent 底 + 白字,z-index 999 永不被色块盖住 */
+.read-pct-fixed {
+  position: fixed;
+  right: 14px;
+  /* v1.58: 与进度条同区间 — 条从 top:56px 到 bottom:6px,高度 = 100vh-62px */
+  top: calc(56px + (100vh - 62px) * (var(--pct) / 100));
+  transform: translateY(-50%);
+  background: var(--bg-2);        /* 恢复原配色 */
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 11px;
+  font-family: var(--font-mono, monospace);
+  padding: 1px 6px;
+  border-radius: 3px;
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 999;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.read-pct-fixed:not(:empty) { opacity: 1; }
+@media (max-width: 720px) {
+  /* 移动端进度条 right:4px width:3px,标签右移贴合 */
+  .read-pct-fixed { top: calc(50px + (100vh - 56px) * (var(--pct) / 100)); right: 10px; }
+}
+
 
 /* === V39: 历史面板 === */
 .hist-toolbar {

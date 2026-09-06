@@ -792,8 +792,11 @@ export class LlApp extends LitElement {
         <!-- V39: 阅读进度条(右侧固定) -->
         <div class="read-progress ${this.readProgressVisible ? 'visible' : ''}">
           <div class="fill" style="height: ${this.readProgress}%;"></div>
-          <div class="pct" style="top: ${this.readProgress}%;">${this.readProgress}%</div>
         </div>
+        <!-- v1.57: % 标签独立 fixed 层,z-index 999 永不被色块盖住,高对比背景 -->
+        ${this.readProgressVisible && this.readProgress > 0 ? html`
+          <div class="read-pct-fixed" style="--pct: ${this.readProgress};">${this.readProgress}%</div>
+        ` : ''}
 
         <button
           class="sidebar-toggle ${(this.currentNote || this.localFile) ? 'dim' : ''}"
