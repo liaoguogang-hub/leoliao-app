@@ -1,4 +1,4 @@
-# notify-sync-status.ps1 — OSS 同步失败告警
+﻿# notify-sync-status.ps1 — OSS 同步失败告警
 # 由 update-manifest-silent.bat 在每次同步后调用(SYSTEM 身份)
 #
 # 逻辑:

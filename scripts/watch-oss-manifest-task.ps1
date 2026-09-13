@@ -1,4 +1,4 @@
-# watch-oss-manifest-task.ps1 — 监控 LeoLiaoOSSManifest 任务健康度
+﻿# watch-oss-manifest-task.ps1 — 监控 LeoLiaoOSSManifest 任务健康度
 #
 # 每 15 分钟跑一次(由 WTS 任务 WatchOSSManifestTask 触发),检查:
 #   1. 任务是否还在系统里
@@ -20,6 +20,10 @@ $LogPath   = 'D:\leoliao-app\scripts\watch-task.log'
 $WarnMin   = 20   # LastRunTime 超过 20 分钟 → WARN
 $ErrorMin  = 45   # LastRunTime 超过 45 分钟 → ERROR
 $MaxLogKB  = 512  # 日志轮转阈值(KB)
+
+# 强制 UTF-8 输出(避免中文 emoji 在 stdout/日志里变乱码)
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 function Write-Log {
     param([string]$Message, [string]$Level = 'INFO')
@@ -59,7 +63,7 @@ try {
     $nextRun    = $info.NextRunTime
     $missed     = $info.NumberOfMissedRuns
 
-    if ($lastRun -eq $null -or $lastRun -eq [datetime][]) {
+    if ($lastRun -eq $null -or $lastRun -eq [DateTime]::MinValue) {
         Write-Log "任务在系统里但从未跑过 (State=$state, NextRun=$nextRun)" 'WARN'
     } else {
         $idleMin = ((Get-Date) - $lastRun).TotalMinutes
