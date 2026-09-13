@@ -65,7 +65,7 @@ param(
     [string]$ScriptPath  = 'D:\leoliao-app\scripts\gen_oss_manifest.mjs',
     [string]$ScriptDir   = 'D:\leoliao-app\scripts',
     [int]$BootDelayMinutes = 2,
-    [int]$IntervalMinutes  = 10
+    [int]$IntervalMinutes  = 5
 )
 
 # ---------- 0. Elevation check ----------

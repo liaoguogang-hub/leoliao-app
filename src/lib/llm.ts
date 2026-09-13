@@ -25,7 +25,7 @@ export interface LLMSettings {
   apiKey: string;
   model: string;
   temperature?: number;       // 默认 0.7
-  maxTokens?: number;        // 默认 1024
+  maxTokens?: number;        // 默认 16384(足够 Agent 长回答不截断)
 }
 
 interface OpenAIRequest {
@@ -194,7 +194,7 @@ function toOpenAIRequest(messages: ChatMessage[], settings: LLMSettings): OpenAI
     messages,
     stream: true,
     temperature: settings.temperature ?? 0.7,
-    max_tokens: settings.maxTokens ?? 1024,
+    max_tokens: settings.maxTokens ?? 16384,
   };
 }
 
@@ -204,7 +204,7 @@ function toAnthropicRequest(messages: ChatMessage[], settings: LLMSettings): Omi
   return {
     model: settings.model,
     messages: nonSystem,
-    max_tokens: settings.maxTokens ?? 1024,
+    max_tokens: settings.maxTokens ?? 16384,
     temperature: settings.temperature ?? 0.7,
     system: systemMsgs.length ? systemMsgs.join('\n\n') : undefined,
   };

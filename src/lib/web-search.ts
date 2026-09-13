@@ -75,9 +75,18 @@ export interface WebResult {
   content: string;       // 摘要/正文片段
 }
 
-/** 统一入口 — 各 provider 内部规范化为 {title,url,content}[] */
+/** v1.63: 暴露每次 web 搜索的实际 query/url/results,便于跑题诊断 */
+function logSearch(provider: string, query: string, url: string, count: number) {
+  console.log(`[web-search] provider=${provider} query="${query.slice(0, 100)}" url=${url} hits=${count}`);
+}
 export async function webSearch(query: string, settings: WebSearchSettings): Promise<WebResult[]> {
   const preset = WEB_PROVIDERS[settings.provider];
+  // v1.62: url 缺失,或 provider 需要 apiKey 但未填,自动 fallback 到 DuckDuckGo(无需 key)
+  // 修复前:空 apiKey 直接 fetch Tavily → Tavily 返回默认 fallback(AI 搜索 API 文档),跑题
+  if (!settings.url || (preset.requiresApiKey && !settings.apiKey)) {
+    console.warn(`[web-search] ${settings.provider} 缺 url/apiKey,fallback DuckDuckGo`);
+    return ddgSearch(query, { ...settings, provider: 'duckduckgo', url: WEB_PROVIDERS.duckduckgo.defaultUrl });
+  }
   if (!settings.url && preset.defaultUrl) {
     settings = { ...settings, url: preset.defaultUrl };
   }
@@ -106,11 +115,13 @@ async function tavilySearch(query: string, s: WebSearchSettings): Promise<WebRes
   });
   if (!res.ok) throw new Error(`Tavily ${res.status}`);
   const json: any = await res.json();
-  return (json.results || []).map((r: any) => ({
+  const out = (json.results || []).map((r: any) => ({
     title: r.title || '',
     url: r.url || '',
     content: (r.content || '').slice(0, 800),
   }));
+  logSearch('tavily', query, s.url, out.length);
+  return out;
 }
 
 async function bingSearch(query: string, s: WebSearchSettings): Promise<WebResult[]> {
@@ -123,11 +134,13 @@ async function bingSearch(query: string, s: WebSearchSettings): Promise<WebResul
   if (!res.ok) throw new Error(`Bing ${res.status}`);
   const json: any = await res.json();
   const items = json.webPages?.value || [];
-  return items.map((r: any) => ({
+  const out = items.map((r: any) => ({
     title: r.name || '',
     url: r.url || '',
     content: (r.snippet || '').slice(0, 800),
   }));
+  logSearch('bing', query, s.url, out.length);
+  return out;
 }
 
 /** DDG HTML endpoint: POST q=...，HTML 返回，需 parse — 简化实现，只取前 N 个 .result__a */
@@ -140,7 +153,9 @@ async function ddgSearch(query: string, s: WebSearchSettings): Promise<WebResult
   });
   if (!res.ok) throw new Error(`DDG ${res.status}`);
   const html = await res.text();
-  return parseDDGHTML(html, s.maxResults);
+  const out = parseDDGHTML(html, s.maxResults);
+  logSearch('duckduckgo', query, s.url, out.length);
+  return out;
 }
 
 function parseDDGHTML(html: string, max: number): WebResult[] {
@@ -176,11 +191,13 @@ async function searxngSearch(query: string, s: WebSearchSettings): Promise<WebRe
   const res = await fetch(url.toString());
   if (!res.ok) throw new Error(`SearXNG ${res.status}`);
   const json: any = await res.json();
-  return (json.results || []).map((r: any) => ({
+  const out = (json.results || []).map((r: any) => ({
     title: r.title || '',
     url: r.url || '',
     content: (r.content || r.snippet || '').slice(0, 800),
   }));
+  logSearch('searxng', query, s.url, out.length);
+  return out;
 }
 
 /** 自定义：POST {query, max_results} 期望返回 {results:[{title,url,content}]} */
@@ -196,9 +213,11 @@ async function customSearch(query: string, s: WebSearchSettings): Promise<WebRes
   if (!res.ok) throw new Error(`Custom ${res.status}`);
   const json: any = await res.json();
   const items = json.results || json.data || [];
-  return items.slice(0, s.maxResults).map((r: any) => ({
+  const out = items.slice(0, s.maxResults).map((r: any) => ({
     title: r.title || r.name || '',
     url: r.url || r.link || '',
     content: (r.content || r.snippet || r.text || '').slice(0, 800),
   }));
+  logSearch('custom', query, s.url, out.length);
+  return out;
 }

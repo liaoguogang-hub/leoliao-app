@@ -100,34 +100,24 @@ export class LlApp extends LitElement {
       }
     } catch { /* 默认值 */ }
     this.showWelcomeScreen();   // V38: 与同步并行,不阻塞
-    // v1.33.0: 5 分钟内已成功同步过就跳过(避免每次打开都重新拉 OSS)
-    const lastSync = parseInt(localStorage.getItem('ll-last-sync') || '0', 10);
-    const sinceMs = Date.now() - lastSync;
-    if (lastSync && sinceMs < 5 * 60 * 1000) {
-      console.log(`[知识库] 上次同步 ${Math.round(sinceMs / 1000)}s 前,跳过全量拉取`);
-      // 只从 IndexedDB 加载已有缓存(超快)
-      try {
-        const { loadManifest } = await import('./services/db');
-        const cached = await loadManifest();
-        if (cached && cached.length > 0) {
-          this.allEntries = cached;
-          await this.loadLocalNotes();
-          this.stats = await cacheStats();
-          this.status = 'ready';
-        } else {
-          // 没缓存 → 必须同步
-          console.log('[知识库] 缓存为空,执行全量同步');
-          await this.runSync();
-          localStorage.setItem('ll-last-sync', String(Date.now()));
-        }
-      } catch (e) {
-        console.warn('[知识库] 缓存加载失败,fallback 全量同步:', e);
-        await this.runSync();
-        localStorage.setItem('ll-last-sync', String(Date.now()));
+    // v1.59: 取消自动同步 — 仅从 IndexedDB 加载缓存,需同步时用户点手动按钮
+    try {
+      const { loadManifest } = await import('./services/db');
+      const cached = await loadManifest();
+      if (cached && cached.length > 0) {
+        this.allEntries = cached;
+        await this.loadLocalNotes();
+        this.stats = await cacheStats();
+        this.status = 'ready';
+        console.log(`[知识库] 启动仅读缓存(${cached.length} 条),不自动同步`);
+      } else {
+        // 没缓存 → 提示用户手动同步(首次开仍是空状态)
+        console.log('[知识库] 缓存为空,等待用户手动点同步');
+        this.status = 'ready';
       }
-    } else {
-      await this.runSync();
-      localStorage.setItem('ll-last-sync', String(Date.now()));
+    } catch (e) {
+      console.warn('[知识库] 缓存加载失败:', e);
+      this.status = 'ready';
     }
   }
 
@@ -799,7 +789,7 @@ export class LlApp extends LitElement {
         ` : ''}
 
         <button
-          class="sidebar-toggle ${(this.currentNote || this.localFile) ? 'dim' : ''}"
+          class="sidebar-toggle ${this.sidebarOpen ? 'open' : ''} ${(this.currentNote || this.localFile) ? 'dim' : ''}"
           @click=${() => this.sidebarOpen = !this.sidebarOpen}
           aria-label="切换文件树"
         >

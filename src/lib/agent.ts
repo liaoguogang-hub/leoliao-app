@@ -111,11 +111,11 @@ const kbSearchTool: Tool = {
 /** 工具 2: 联网搜索 */
 const webSearchTool: Tool = {
   name: 'web_search',
-  description: '在互联网上搜索(query → [{title, url, content}])。需要先在 chat settings 配 web URL/api key。',
+  description: '在互联网上搜索(query → [{title, url, content}])。需要先在 chat settings 配 web URL/api key。\n\n**重要:query 不是用户最后一句话的复制**。你要把对话上下文(Agent 之前给用户列出的选项 / 用户的回复 / 当前讨论的主题)综合成一个完整搜索意图。例如用户在前一轮说"请帮我搜这些",Agent 列出 1-3 三个候选,用户回复"2",你应该搜"选项 2 那个主题的完整关键词",而不是搜"2"或"选2"。',
   parameters: {
     type: 'object',
     properties: {
-      query: { type: 'string', description: '搜索关键词(必填)' },
+      query: { type: 'string', description: '搜索关键词(必填)— 从对话上下文综合出的完整主题描述,不要直接复制用户原话' },
     },
     required: ['query'],
   },
@@ -424,6 +424,7 @@ ${toolsPrompt()}
 - 如 kb_search 已找到答案,不要再开 web_search
 - **用户问"每章/全书/每个部分"这类结构化问题时,必须逐章/逐部分多次 kb_search**(每章一次,query 用"章节名+主题词"),不要只搜一次宽泛 query,否则后面的章节会漏掉
 - 检索某章为空时,如实说"该部分 KB 中未检索到原文",**不要**用书的知识编造
+- **web_search 的 query 必须综合对话上下文**(Agent 之前列的候选/选项 + 用户当前回复意图 + 当前讨论主题),不要只把用户最后一句话当 query 复制搜。例如用户回"2",你应搜"选项 2 那个主题的完整关键词",不是搜"2"
 - 最终回答尽量覆盖用户要求的全部章节,别漏`;
 }
 

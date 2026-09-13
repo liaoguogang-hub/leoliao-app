@@ -1437,6 +1437,14 @@ code.language-mermaid::before {
   .sidebar-toggle {
     display: block;
   }
+  /* v1.65: 侧栏打开时,✕ 关闭按钮移到侧栏右上角并缩小(侧栏宽 280 - 按钮 24 - 间隙 8 = 248) */
+  .sidebar-toggle.open {
+    left: 248px;
+    top: 10px;
+    width: 24px;
+    height: 24px;
+    font-size: 12px;
+  }
   .tree {
     overflow-y: visible;
     max-height: none;
@@ -1691,15 +1699,24 @@ code.language-mermaid::before {
 }
 
 .modal-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
   background: transparent;
   border: none;
   color: var(--dim);
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
+  width: 24px;        /* v1.64: 32→24 缩小 */
+  height: 24px;
+  border-radius: 4px;
   cursor: pointer;
-  font-size: 18px;
+  font-size: 14px;    /* v1.64: 18→14 缩小 */
   font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  z-index: 2;
 }
 
 .modal-close:hover,
