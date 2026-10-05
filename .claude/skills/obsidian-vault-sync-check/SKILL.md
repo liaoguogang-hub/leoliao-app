@@ -109,7 +109,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\Obsidian\check-vault-sync
      | `SyncObsidianVault-LogonDelay` | AtLogOn + 5 min | `sync-vault.ps1` |
      | `SyncObsidianVault-Periodic` | 每 30 分钟 | `sync-vault.ps1` |
      | `CheckVaultSync` | 每 15 分钟 | `check-vault-sync.ps1 -Fix` |
-   - 验收：`Start-ScheduledTask -TaskName CheckVaultSync` 后看 `scripts\vault-sync-check.log` 是否新增一行，并用 `Get-ScheduledTaskInfo` 核对 `LastTaskResult`（0=OK / 1=WARN / 2=FAIL）。
+   - ⚠ 动作里**必须**带 `-NonInteractive -WindowStyle Hidden`：交互式用户任务若不加，`powershell -File` 会**弹出控制台窗口**。`SyncObsidianVault-Periodic`(30 min) + `CheckVaultSync`(15 min) 叠加起来**每小时最多弹 6 次窗口**（2026-10-06 用户截图实际踩到）。完整参数：`-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "<script>"`
+   - 验收：`Start-ScheduledTask -TaskName CheckVaultSync` 后看 `scripts\vault-sync-check.log` 是否新增一行，并用 `Get-ScheduledTaskInfo` 核对 `LastTaskResult`（0=OK / 1=WARN / 2=FAIL）。日志行含 `nonOK=[项名:状态]`，可直接看出是哪一项非 OK。
 
    ⚠ **绝不要注册成 SYSTEM**（老脚本 `sync-tasks.xml` 用的就是 `<UserId>S-1-5-18</UserId>`，这正是历史故障根因，见下）。
 
