@@ -1,4 +1,4 @@
-﻿# register-oss-sync-check.ps1 - 注册 CheckOSSSync 定期检查任务
+# register-oss-sync-check.ps1 - 注册 CheckOSSSync 定期检查任务
 # 管理员双击 register-oss-sync-check.bat 自动调用本脚本
 # 每 30 分钟跑 check-oss-sync.ps1 -Fix(异常时自动触发一次同步)
 
@@ -28,9 +28,12 @@ if ($existing) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
-$action = New-ScheduledTaskAction -Execute "powershell.exe" `
-    -Argument "-NoProfile","-ExecutionPolicy","Bypass","-File","`"$Ps1Path`"","-Fix" `
-    -WorkingDirectory (Split-Path $Ps1Path -Parent)
+# 让任务执行 bat(已包含 aliyun PATH、UAC 预检、退出码传播)
+# 不用 -Argument 数组(PS 5.1 的 New-ScheduledTaskAction -Argument 解析数组有问题),
+# 也不用 -WorkingDirectory(由 bat 自己 cd /d 到正确目录)
+$action = New-ScheduledTaskAction -Execute 'cmd.exe' `
+    -Argument ('/c', $BatPath) `
+    -WorkingDirectory (Split-Path $BatPath -Parent)
 
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
     -RepetitionInterval (New-TimeSpan -Minutes 30) `

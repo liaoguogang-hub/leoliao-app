@@ -125,10 +125,15 @@ try {
     $nextRun    = $info.NextRunTime
     $lastResult = $info.LastTaskResult
     $missed     = $info.NumberOfMissedRuns
+    # v1.60: Running 也是健康状态 —— 检查任务常与同步任务同时触发,
+    #        此时看到 State=Running 属正常,不应误报 FAIL。
+    #        只有 Disabled(被禁用)/ Queued 超时 等才判 FAIL。
     if ($taskState -eq 'Ready') {
         Add-Check '计划任务' OK "State=Ready, LastResult=$lastResult, MissedRuns=$missed"
+    } elseif ($taskState -eq 'Running') {
+        Add-Check '计划任务' OK "State=Running(正在执行,正常), LastResult=$lastResult, MissedRuns=$missed"
     } else {
-        Add-Check '计划任务' FAIL "State=$taskState (期望 Ready)"
+        Add-Check '计划任务' FAIL "State=$taskState (期望 Ready 或 Running)"
     }
 } catch {
     # 非管理员看不到 SYSTEM 任务
