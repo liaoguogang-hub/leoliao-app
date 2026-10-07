@@ -4,7 +4,7 @@ set "PS1=D:\leoliao-app\scripts\set-5min-single.ps1"
 set "LOG=D:\leoliao-app\scripts\set-5min-single.log"
 
 rem ---- admin check: fltmc only works when elevated ----
-fltmc >nul 2>&1
+net session >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Administrator rights required. Requesting elevation ^(UAC^)...
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"

@@ -11,7 +11,7 @@ rem   Pause only when a human double-clicked this file (i.e. not run by Task Sch
 set "PAUSE_AT_END=0"
 echo %CMDCMDLINE% | find /i "%~nx0" >nul 2>&1 && set "PAUSE_AT_END=1"
 
-fltmc >nul 2>&1
+net session >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Administrator required - requesting elevation ^(UAC^)...
     powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
