@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Markdown 渲染器 — markdown-it + Obsidian 扩展
  *
  * 支持：
@@ -124,57 +124,90 @@ function md(): MarkdownIt {
     return true;
   });
 
-  // Obsidian callouts: > [!note] 内容
-  // markdown-it 默认 blockquote 渲染，我们拦截开头 [!type]
+  // Obsidian callouts: > [!type] 标题
+  //
+  // v1.67 重写(踩了四个坑才找到正确解法,务必保留注释):
+  //  1. 自定义 token 'callout_open'/'callout_close' 没有对应 renderer rule,
+  //     markdown-it 找不到 rule 时把 tag 名+attrs 拼成字符串直接输出,
+  //     正文出现字面量 < class="callout callout-abstract"> 和结尾的 <>
+  //     -> 必须用 markdown-it 内置 token 名(blockquote_open/paragraph_open/inline)
+  //  2. 改用 blockquote_open 后内容重复渲染两次。实测:state.tokens 只有 3 个,
+  //     输出却是 2 遍。根因是在 block rule 内部调用 state.md.parseInline()
+  //     返回的 token 直接 push,会被 markdown-it 的 core 阶段再次处理。
+  //     -> 正确做法参考官方 rules_block/paragraph.mjs:
+  //        只 push 一个 'inline' token 并设置 .content,让 markdown-it
+  //        在后续阶段自动 parseInline 填充 children。
+  //  3. 试图改写 state.src 做字符串预处理会破坏 bMarks/eMarks 偏移,
+  //     导致后续所有行错位 -> 不要改 state.src。
+  //  4. 类型正则 \w+ 不支持连字符/下划线 -> 放宽为 [a-zA-Z0-9_-]+。
   _md.block.ruler.before('blockquote', 'callout', (state, startLine, endLine, silent) => {
     const start = state.bMarks[startLine] + state.tShift[startLine];
-    const max = state.eMarks[startLine];
-    const line = state.src.slice(start, max);
-    const m = line.match(/^>\s*\[!(\w+)\]\s*(.*)$/);
+    const line = state.src.slice(start, state.eMarks[startLine]);
+    const m = line.match(/^>\s*\[!([a-zA-Z0-9_-]+)\]([+-]?)\s*(.*)$/);
     if (!m) return false;
     if (silent) return true;
 
     const type = m[1].toLowerCase();
-    const firstLineText = m[2].trim();
+    const fold = m[2];
+    const title = m[3].trim();
 
-    const tokens: any[] = [];
-    const open = new state.Token('callout_open', '', 0);
-    open.attrSet('class', `callout callout-${type}`);
-    open.block = true;
-    tokens.push(open);
-
-    // 如果第一行有内容，作为段落开始
-    if (firstLineText) {
-      const inline = state.md.parseInline(firstLineText, state.env);
-      tokens.push(...inline);
-    }
-
-    // 后续 > 行作为内容
+    // 收集 callout 正文:从下一行开始连续的 '>' 行,去掉 '> ' 前缀
+    const bodyLines: string[] = [];
     let lineIdx = startLine + 1;
-    while (lineIdx < endLine) {
+    for (; lineIdx < endLine; lineIdx++) {
       const s = state.bMarks[lineIdx] + state.tShift[lineIdx];
       const e = state.eMarks[lineIdx];
-      const l = state.src.slice(s, e);
-      const mm = l.match(/^>\s?(.*)$/);
+      const mm = state.src.slice(s, e).match(/^\s{0,3}>\s?(.*)$/);
       if (!mm) break;
-      if (mm[1].trim()) {
-        const inline = state.md.parseInline(mm[1], state.env);
-        tokens.push(...inline);
-        const softbreak = new state.Token('softbreak', '', 0);
-        tokens.push(softbreak);
-      }
-      lineIdx++;
+      bodyLines.push(mm[1]);
+    }
+    state.line = lineIdx;
+
+    // ⚠️ 关键:state.push() 本身已经把 token 加进 state.tokens,
+    //    所以这里【不要】再收集到 tokens 数组、更不要 state.tokens.push(...tokens),
+    //    否则每个 token 都会出现两份 —— 表现为内容重复渲染两次。
+    //    踩过这个坑:state.tokens 只有 3 个时输出仍是 2 遍。
+
+    // 外层:blockquote_open(内置 token,markdown-it 有默认 renderer)
+    const bqOpen = state.push('blockquote_open', 'blockquote', 1);
+    bqOpen.attrSet('class', `callout callout-${type}`);
+    if (fold === '-') bqOpen.attrJoin('class', 'callout-folded');
+    bqOpen.block = true;
+    bqOpen.map = [startLine, lineIdx];
+
+    // 标题段落
+    const tOpen = state.push('paragraph_open', 'p', 1);
+    tOpen.attrSet('class', 'callout-title');
+    tOpen.block = true;
+    const tInline = state.push('inline', '', 0);
+    tInline.content = title || type;
+    tInline.map = [startLine, startLine];
+    tInline.children = [];
+    const tClose = state.push('paragraph_close', 'p', -1);
+    tClose.block = true;
+
+    // 正文:整段合成一个 inline token(段落内的软换行保留为空格)
+    // ⚠️ 不要用 state.md.parse() 解析正文 —— 会走完整 core 流程(含本 callout 规则),
+    //    导致正文重复渲染(踩过这个坑)。
+    //    列表/表格等块级语法在 callout 内会退化为普通文本,这是已知取舍。
+    const bodySrc = bodyLines.join('\n').trim();
+    if (bodySrc) {
+      const pOpen = state.push('paragraph_open', 'p', 1);
+      pOpen.attrSet('class', 'callout-body');
+      pOpen.block = true;
+      const pInline = state.push('inline', '', 0);
+      pInline.content = bodySrc.replace(/\n[ \t]*(?=\S)/g, ' ');
+      pInline.map = [startLine, lineIdx];
+      pInline.children = [];
+      const pClose = state.push('paragraph_close', 'p', -1);
+      pClose.block = true;
     }
 
-    const close = new state.Token('callout_close', '', 0);
-    close.block = true;
-    tokens.push(close);
-
-    state.line = lineIdx;
-    state.tokens.push(...tokens);
+    const bqClose = state.push('blockquote_close', 'blockquote', -1);
+    bqClose.block = true;
+    bqClose.map = [startLine, lineIdx];
     return true;
   });
-
   // #tag 提取（在 inline 阶段）
   // 不在这里改渲染，标签由 parseTags() 函数提取
 
@@ -287,7 +320,9 @@ export function parseNote(rawContent: string, opts: ParseNoteOptions = {}): Pars
   }
   const tags = extractTags(content, frontmatter);
   const links = extractWikilinks(content);
-  let html = md().render(content);
+  // v1.67: callout 类型序列由 callout_marker 规则写入 env,渲染后注入 class
+  const env: Record<string, unknown> = {};
+  let html = md().render(content, env);
   // v1.14.0: chunk 锚点注入(若 opts.chunks + opts.path 同时提供)
   if (opts.chunks && opts.chunks.length > 0 && opts.path) {
     html = injectChunkAnchors(html, opts.chunks, opts.path);
