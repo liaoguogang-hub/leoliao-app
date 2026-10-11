@@ -1285,6 +1285,46 @@ code.language-mermaid::before {
   color: var(--warn);
 }
 
+/* v1.66: 表格响应式 — 宽表格在手机上横向滚动,不撑破布局 */
+.note-body table {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-collapse: collapse;
+  margin: 1em 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.note-body table th,
+.note-body table td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+.note-body table th {
+  background: var(--bg-2);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.note-body table tbody tr:nth-child(even) {
+  background: rgba(128, 160, 190, 0.06);
+}
+/* 表格里的长文本允许换行,避免 nowrap 撑太宽 */
+.note-body table td {
+  white-space: normal;
+  min-width: 60px;
+  max-width: 320px;
+}
+/* 引用块内的表格:去掉额外缩进,避免手机上双重挤压 */
+.note-body blockquote table {
+  margin: 0.5em 0;
+  white-space: normal;
+}
+
 .note-body pre {
   background: var(--bg-2);
   border: 1px solid var(--border);

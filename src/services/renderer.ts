@@ -80,6 +80,50 @@ function md(): MarkdownIt {
     return true;
   });
 
+  // v1.66: ASCII 艺术图保护 — 代码块外的 ASCII 图(供需曲线/坐标系等)用 | 和 _ 绘制,
+  // markdown-it 会把 | 当表格管道、_ 当斜体标记,导致图形被拆成乱码段落。
+  // 判定:从当前行起连续 >=2 行含 "|",且其中没有一行形如 |---| 分隔行,
+  //      也不含表格的表头特征(至少 2 个连续非空单元格) -> 整块当代码块渲染。
+  _md.block.ruler.before('table', 'ascii_art', (state, startLine, endLine, silent) => {
+    // 从 startLine 起收集连续含 | 的行
+    let last = startLine;
+    while (last < endLine) {
+      const s = state.bMarks[last] + state.tShift[last];
+      const e = state.eMarks[last];
+      const line = state.src.slice(s, e);
+      if (line.indexOf('|') === -1) break;
+      last++;
+    }
+    const count = last - startLine;
+    if (count < 2) return false;
+
+    // 收集块内全部行文本,做特征判断
+    const lines: string[] = [];
+    for (let i = startLine; i < last; i++) {
+      const s = state.bMarks[i] + state.tShift[i];
+      const e = state.eMarks[i];
+      lines.push(state.src.slice(s, e));
+    }
+
+    // 若含标准表格分隔行(比如 |---|---| 或 | --- | --- |),说明是真表格,交给 table 规则处理
+    if (/^\s*\|?[\s:|-]*-{3,}[\s:|-]*\|?\s*$/.test(lines[1] || '')) {
+      if (/^\s*\|/.test(lines[0] || '') && /-/.test(lines[1] || '')) return false;
+    }
+    // 含表格分隔行且首行是表头 -> 真表格
+    if (/-{3,}/.test(lines[1] || '') && lines[1].indexOf('|') !== -1) return false;
+
+    if (silent) return true;
+
+    // 命中:整块渲染为代码块
+    const token = state.push('fence', 'code', 0);
+    token.info = '';
+    token.content = state.getLines(startLine, last, state.blkIndent, false) + '\n';
+    token.markup = '```';
+    token.block = true;
+    state.line = last;
+    return true;
+  });
+
   // Obsidian callouts: > [!note] 内容
   // markdown-it 默认 blockquote 渲染，我们拦截开头 [!type]
   _md.block.ruler.before('blockquote', 'callout', (state, startLine, endLine, silent) => {

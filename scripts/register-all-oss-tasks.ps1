@@ -84,7 +84,11 @@ function New-RunTask {
     $tr.StartBoundary = (Get-Date).AddMinutes(1).ToString('yyyy-MM-ddTHH:mm:ss')
     try {
         $tr.Repetition.Interval = "PT${Minutes}M"
-        $tr.Repetition.Duration = 'P1D'
+        # v1.64 修复: Duration 决定重复窗口的长度。
+        #   之前设成 'P1D'(1 天),导致任务只在注册后 24 小时内重复,
+        #   之后永久静默 —— 表现为"任务还在、配置正常、但几天不跑一次"。
+        #   改为 3650 天(约 10 年),配合 StopAtDurationEnd=false 实现持续重复。
+        $tr.Repetition.Duration = 'P3650D'
         try { $tr.Repetition.StopAtDurationEnd = $false } catch {}
     } catch {
         Say "  [跳过] Repetition 设置失败(将只触发一次): $($_.Exception.Message)" 'DarkGray'
