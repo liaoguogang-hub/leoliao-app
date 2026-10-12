@@ -22,6 +22,7 @@ import { loadSettings, applySettings, type ThemeSettings } from './services/sett
 import { pickAndOpenFile, type OpenedFile } from './services/file-opener';
 import { saveToLocal } from './services/export-service';
 import { pickCachedWelcome, fetchRandomWelcomeQuick, syncWelcome } from './services/welcome';
+import { loadLastRead, saveLastRead, clearLastRead } from './services/last-read';
 
 @customElement('ll-app')
 export class LlApp extends LitElement {
@@ -83,6 +84,110 @@ export class LlApp extends LitElement {
     } catch { /* 静默 */ }
   }
 
+  // ===== v1.68: 阅读位置记忆 =====
+  /** 待落盘的阅读位置(节流合并) */
+  private lastReadPending: { path: string; ratio: number; px: number } | null = null;
+  /** 节流定时器 */
+  private lastReadTimer: number | null = null;
+  /** 启动恢复只做一次 */
+  private lastReadRestored = false;
+  /** 启动恢复期间,用户一旦主动操作就放弃后续重试 */
+  private lastReadCancelled = false;
+  /** 正在恢复的路径:此路径不做"归零保存",避免覆盖待恢复的位置 */
+  private restoringPath: string | null = null;
+
+  /**
+   * 节流保存阅读位置。
+   * 滚动事件每秒可能触发几十次,直接写 localStorage 会造成卡顿,
+   * 因此合并成"停止滚动 400ms 后落盘一次"。
+   */
+  private queueLastReadSave(path: string, ratio: number, px: number) {
+    this.lastReadPending = { path, ratio, px };
+    if (this.lastReadTimer !== null) return;
+    this.lastReadTimer = window.setTimeout(() => {
+      this.lastReadTimer = null;
+      this.flushLastRead();
+    }, 400);
+  }
+
+  /** 立即落盘(App 切后台/关闭时必须调用,否则节流中的数据会丢) */
+  private flushLastRead() {
+    const p = this.lastReadPending;
+    if (!p) return;
+    this.lastReadPending = null;
+    saveLastRead({ path: p.path, ratio: p.ratio, px: p.px, at: Date.now() });
+  }
+
+  /** App 进入后台 / 页面隐藏时落盘(iOS/Android WebView 关进程前最后的机会) */
+  private handleVisibilityChange = () => {
+    if (document.visibilityState === 'hidden') this.flushLastRead();
+  };
+
+  private handlePageHide = () => { this.flushLastRead(); };
+
+  /**
+   * 启动时恢复上次阅读位置。
+   * 只在清单加载完成后调用;路径已不在清单里(删除/重命名)则清除记录。
+   */
+  private async restoreLastRead() {
+    if (this.lastReadRestored) return;
+    const saved = loadLastRead();
+    if (!saved) { this.lastReadRestored = true; return; }
+    // 校验路径必须真实存在才能恢复。
+    // 注意:必须用 allEntries + localNoteEntries 的合集 —— 本地笔记(📕/📘 开头的
+    // PDF/EPUB note)不在 OSS manifest 里,只查 allEntries 会把它们误判为已删除。
+    const known = new Set<string>([
+      ...this.allEntries.map(e => e.path),
+      ...this.localNoteEntries.map(e => e.path),
+    ]);
+    if (known.size === 0) return;   // 首次安装/缓存被清:不恢复,等同步完再试
+    if (!known.has(saved.path)) {
+      clearLastRead();
+      this.lastReadRestored = true;
+      return;
+    }
+    this.lastReadRestored = true;
+
+    this.restoringPath = saved.path;
+    await this.openNote(saved.path);
+    this.restoringPath = null;
+
+    const apply = (): boolean => {
+      if (this.lastReadCancelled) return true;
+      const main = this.querySelector('.main') as HTMLElement | null;
+      if (!main) return false;
+      const max = main.scrollHeight - main.clientHeight;
+      if (max <= 0) return false;
+      // 优先比例(跨字号/屏宽稳定);比例接近 0 时用像素兜底
+      const target = saved.ratio > 0.001 ? saved.ratio * max : saved.px;
+      const clamped = Math.min(max, Math.max(0, Math.round(target)));
+      main.scrollTop = clamped;
+      this.updateReadProgress(main);
+      return true;
+    };
+
+    // 用户主动操作(触摸/滚轮)则停止后续重试,避免和用户抢滚动条
+    const cancel = () => { this.lastReadCancelled = true; };
+    const main = this.querySelector('.main') as HTMLElement | null;
+    if (main) {
+      main.addEventListener('touchstart', cancel, { passive: true, once: true });
+      main.addEventListener('wheel', cancel, { passive: true, once: true });
+    }
+
+    // 内容/图片撑开会改变 scrollHeight,分几次重试直到稳定
+    requestAnimationFrame(() => {
+      apply();
+      window.setTimeout(apply, 250);
+      window.setTimeout(apply, 800);
+      window.setTimeout(() => {
+        if (main) {
+          main.removeEventListener('touchstart', cancel);
+          main.removeEventListener('wheel', cancel);
+        }
+      }, 1200);
+    });
+  }
+
   async connectedCallback() {
     super.connectedCallback();
     if (Capacitor.isNativePlatform()) {
@@ -91,6 +196,9 @@ export class LlApp extends LitElement {
     // V29: 应用主题 + 绑 ESC 键
     applySettings(this.theme);
     document.addEventListener('keydown', this.handleKeydown);
+    // v1.68: 切后台/关页面时立刻落盘阅读位置
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    window.addEventListener('pagehide', this.handlePageHide);
     // v1.13.0: 恢复侧栏 UI 偏好(Tab/Rerank)
     try {
       const ui = JSON.parse(localStorage.getItem('ll-sidebar-ui') || '{}');
@@ -109,6 +217,8 @@ export class LlApp extends LitElement {
         await this.loadLocalNotes();
         this.stats = await cacheStats();
         this.status = 'ready';
+        // v1.68: 恢复上次阅读位置(打开同一篇笔记并滚回原处)
+        this.restoreLastRead().catch((e) => console.warn('[last-read] 恢复失败:', e));
         console.log(`[知识库] 启动仅读缓存(${cached.length} 条),不自动同步`);
       } else {
         // 没缓存 → 提示用户手动同步(首次开仍是空状态)
@@ -142,6 +252,9 @@ export class LlApp extends LitElement {
 
   disconnectedCallback() {
     document.removeEventListener('keydown', this.handleKeydown);
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    window.removeEventListener('pagehide', this.handlePageHide);
+    this.flushLastRead();   // v1.68: 卸载前落盘
     super.disconnectedCallback();
   }
 
@@ -168,6 +281,12 @@ export class LlApp extends LitElement {
       this.readProgress = pct;
       this.readProgressVisible = visible;
     }
+    // v1.68: 记住阅读位置(节流写盘)
+    //   恢复流程中也要写:apply() 设好 scrollTop 后由这里的 scroll 事件落盘真实比例;
+    //   若用户在恢复期间自己滚走,也应当记录用户的新位置。
+    if (this.currentNote) {
+      this.queueLastReadSave(this.currentNote.path, main.scrollTop / max, main.scrollTop);
+    }
   }
 
   /** V39: 切换笔记/本地文件时重置进度到顶部,并重算可见性 */
@@ -193,6 +312,8 @@ export class LlApp extends LitElement {
       this.syncStatus = (await import('./services/sync')).getStatus();
       this.stats = await cacheStats();
       this.status = 'ready';
+      // v1.68: 缓存为空时先点同步,同步完成后再恢复上次阅读位置
+      this.restoreLastRead().catch((e) => console.warn('[last-read] 恢复失败:', e));
     } catch (e) {
       this.status = 'error';
       this.errorMsg = String(e);
@@ -209,6 +330,17 @@ export class LlApp extends LitElement {
       if (note) {
         this.currentNote = note;
         this.resetReadProgress();
+        // v1.68: 立刻记住"当前这篇"。openNote 后若用户没滚动,scroll 事件不会触发,
+        //        不主动写就会残留上一篇的路径,导致下次打开跳错笔记。
+        //        恢复流程中的那篇不写(保留待恢复的位置,等 apply() 写入真实比例)。
+        if (this.restoringPath !== path) {
+          if (this.lastReadTimer !== null) {
+            window.clearTimeout(this.lastReadTimer);
+            this.lastReadTimer = null;
+          }
+          this.lastReadPending = null;
+          saveLastRead({ path, ratio: 0, px: 0, at: Date.now() });
+        }
         // V39: 记一笔历史(失败也不阻塞)
         addHistory({
           id: path,
@@ -271,6 +403,11 @@ export class LlApp extends LitElement {
         this.currentNote = null;
         this.selectedPath = '';
       }
+      // v1.68: 删掉的就是记住的那篇 → 清除阅读位置,下次启动不再尝试打开
+      const lr = loadLastRead();
+      if (lr && (lr.path === path || lr.path.startsWith(path + '/'))) {
+        clearLastRead();
+      }
       setTimeout(() => { this.noticeMsg = ''; }, 3000);
     } catch (e: any) {
       this.errorMsg = `删除失败: ${e?.message || e}`;
@@ -295,6 +432,11 @@ export class LlApp extends LitElement {
       if (this.currentNote && this.currentNote.path === oldPath) {
         this.currentNote = await getNote(newPath);
         this.selectedPath = newPath;
+      }
+      // v1.68: 记住的路径跟着改名走,否则下次启动会因路径失效而丢失阅读位置
+      const lr = loadLastRead();
+      if (lr && lr.path === oldPath) {
+        saveLastRead({ ...lr, path: newPath, at: Date.now() });
       }
       setTimeout(() => { this.noticeMsg = ''; }, 3000);
     } catch (e: any) {
