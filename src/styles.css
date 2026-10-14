@@ -1285,6 +1285,32 @@ code.language-mermaid::before {
   color: var(--warn);
 }
 
+/* v1.69: LaTeX 公式(KaTeX) */
+.note-body .math-block {
+  margin: 1em 0;
+  padding: 4px 0;
+  /* 超宽公式(如长分式)横向滚动,不撑破手机布局 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  text-align: center;
+}
+.note-body .math-block .katex-display {
+  margin: 0;
+}
+/* 行内公式略微放大,中文正文里更协调 */
+.note-body .katex {
+  font-size: 1.06em;
+}
+/* 公式语法错误时回显源码 */
+.note-body .math-error {
+  color: #cc0000;
+  background: rgba(204, 0, 0, 0.08);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.92em;
+}
+
 /* v1.66: 表格响应式 — 宽表格在手机上横向滚动,不撑破布局 */
 .note-body table {
   display: block;

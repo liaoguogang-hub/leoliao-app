@@ -2,6 +2,8 @@ import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { Capacitor } from '@capacitor/core';
 import './styles.css';
+// v1.69: KaTeX 公式样式(含字体)— 必须全局引入一次
+import 'katex/dist/katex.min.css';
 import './components/file-tree';
 import './components/note-view';
 import './components/settings-panel';

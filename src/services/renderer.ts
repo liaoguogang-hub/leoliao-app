@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Markdown 渲染器 — markdown-it + Obsidian 扩展
  *
  * 支持：
@@ -13,6 +13,7 @@
 
 import MarkdownIt from 'markdown-it';
 import matter from 'gray-matter';
+import { mathPlugin } from './math';
 export interface ParsedNote {
   html: string;
   frontmatter: Record<string, unknown>;
@@ -210,6 +211,9 @@ function md(): MarkdownIt {
   });
   // #tag 提取（在 inline 阶段）
   // 不在这里改渲染，标签由 parseTags() 函数提取
+
+  // v1.69: LaTeX 数学公式(KaTeX) — $$...$$ 块级、$...$ 行内
+  mathPlugin(_md);
 
   return _md;
 }
