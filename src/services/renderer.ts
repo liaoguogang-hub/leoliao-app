@@ -9,6 +9,7 @@
  * - #tag 自动提取
  * - v1.14.0: chunk 边界插 `data-cid` 锚点(配合 Phase R.3 跳转高亮)
  * - v1.21.0: Obsidian 语法补全 — `%%comment%%` 行内注释、mermaid 代码块标记
+ * - v1.70.0: 相对路径图片改写为 OSS 绝对 URL(否则 WebView 里解析成 https://localhost/ 必 404)
  */
 
 import MarkdownIt from 'markdown-it';
@@ -23,6 +24,44 @@ export interface ParsedNote {
 
 // 单例
 let _md: MarkdownIt | null = null;
+
+/* === 图片路径改写(OSS 绝对 URL) ===
+ * md 里的图片是相对路径(如 ![](阅读地图.svg)),WebView base 是 https://localhost,
+ * 相对路径必然 404。渲染时按笔记所在目录拼成 OSS 绝对 URL:
+ *   笔记 wiki/pages/concepts/xx.md + 图片 阅读地图.svg
+ *   → {imageBaseUrl}/wiki/pages/concepts/阅读地图.svg
+ */
+let _imageBaseUrl: string | null = null;
+
+/** 由 sync.ts 注入图片基址(= OSS baseUrl + notesPrefix),避免 renderer 反向依赖 sync */
+export function setImageBaseUrl(url: string | null): void {
+  _imageBaseUrl = url ? url.replace(/\/+$/, '') : null;
+}
+
+// http: https: data: blob: file: 等 scheme,以及 #anchor、//cdn 协议相对
+const ABSOLUTE_SRC_RE = /^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i;
+
+/** 相对图片路径 → OSS 绝对 URL;已是绝对 URL 或未配置基址时原样返回 */
+function resolveImageSrc(src: string, notePath?: string): string {
+  if (!_imageBaseUrl || !src || ABSOLUTE_SRC_RE.test(src)) return src;
+  // markdown-it normalizeLink 已做过百分号编码,先解码再分段重组,避免双重编码
+  let raw = src;
+  try { raw = decodeURIComponent(src); } catch { /* 含裸 % 时用原值 */ }
+  const m = raw.match(/^([^?#]*)([?#][\s\S]*)?$/);
+  const pure = m?.[1] ?? raw;
+  const suffix = m?.[2] ?? '';
+  // 以 / 开头视为 vault 根目录绝对路径,否则相对笔记所在目录解析 ./ ../
+  const segs = pure.startsWith('/')
+    ? pure.split('/')
+    : [...(notePath ?? '').split('/').slice(0, -1), ...pure.split('/')];
+  const resolved: string[] = [];
+  for (const s of segs) {
+    if (s === '' || s === '.') continue;
+    if (s === '..') { resolved.pop(); continue; }
+    resolved.push(s);
+  }
+  return _imageBaseUrl + '/' + resolved.map(encodeURIComponent).join('/') + suffix;
+}
 
 function md(): MarkdownIt {
   if (_md) return _md;
@@ -215,6 +254,21 @@ function md(): MarkdownIt {
   // v1.69: LaTeX 数学公式(KaTeX) — $$...$$ 块级、$...$ 行内
   mathPlugin(_md);
 
+  // v1.70: 图片渲染 — 相对路径改写为 OSS 绝对 URL(依赖 env.notePath)
+  const defaultImageRule = _md.renderer.rules.image
+    ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+  _md.renderer.rules.image = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    const srcIdx = token.attrIndex('src');
+    if (srcIdx >= 0 && token.attrs) {
+      token.attrs[srcIdx][1] = resolveImageSrc(
+        token.attrs[srcIdx][1],
+        (env as { notePath?: string } | undefined)?.notePath,
+      );
+    }
+    return defaultImageRule(tokens, idx, options, env, self);
+  };
+
   return _md;
 }
 
@@ -326,6 +380,8 @@ export function parseNote(rawContent: string, opts: ParseNoteOptions = {}): Pars
   const links = extractWikilinks(content);
   // v1.67: callout 类型序列由 callout_marker 规则写入 env,渲染后注入 class
   const env: Record<string, unknown> = {};
+  // v1.70: 笔记路径传给 image rule,用于把相对图片路径解析到笔记所在目录
+  if (opts.path) env.notePath = opts.path;
   let html = md().render(content, env);
   // v1.14.0: chunk 锚点注入(若 opts.chunks + opts.path 同时提供)
   if (opts.chunks && opts.chunks.length > 0 && opts.path) {

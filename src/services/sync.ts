@@ -15,7 +15,7 @@ import { CapacitorHttp } from '@capacitor/core';
 import type { ManifestEntry, NoteFile, SyncStatus, SyncSource } from '../types';
 import { MOCK_MANIFEST, MOCK_FILES } from '../data/mock-data';
 import * as DB from './db';
-import { parseNote } from './renderer';
+import { parseNote, setImageBaseUrl } from './renderer';
 import { chunkDocument, chunkHash } from './chunker';
 import { buildVectorIndex } from '../lib/search';
 
@@ -82,6 +82,9 @@ const SOURCE: SyncSourceConfig = {
   manifestPath: '/Obsidian/manifest.json',
   notesPrefix: '/Obsidian',
 };
+
+// v1.70: 图片渲染基址 — renderer 把 md 里的相对图片路径拼成 OSS 绝对 URL
+setImageBaseUrl(SOURCE.baseUrl + SOURCE.notesPrefix);
 
 let _status: SyncStatus = {
   source: 'mock',
@@ -234,7 +237,7 @@ export async function getNote(path: string): Promise<NoteFile | null> {
       const mtime = entry?.mtime ?? Date.now();
       const hash = entry?.hash ?? '';
       await DB.saveNote(path, content, mtime, hash);
-      const parsed = parseNote(content);
+      const parsed = parseNote(content, { path });
       return { path, content, ...parsed, mtime };
     } catch (e) {
       const msg = (e as Error).message;
