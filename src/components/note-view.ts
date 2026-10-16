@@ -327,6 +327,13 @@ export class LlNoteView extends LitElement {
         ` : html`
           <div class="note-body" @click=${(e: MouseEvent) => {
             const target = e.target as HTMLElement;
+            // v1.72: 点图片 → 冒泡给 ll-app 开全屏缩放 lightbox
+            if (target.tagName === 'IMG') {
+              this.dispatchEvent(new CustomEvent('open-image', {
+                detail: (target as HTMLImageElement).src, bubbles: true, composed: true,
+              }));
+              return;
+            }
             if (target.tagName === 'A' && target.getAttribute('href')) {
               this.onLinkClick(e, target.getAttribute('href')!);
             }

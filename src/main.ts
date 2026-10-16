@@ -1,6 +1,8 @@
 import { LitElement, html } from 'lit';
 import { customElement, state } from 'lit/decorators.js';
 import { Capacitor } from '@capacitor/core';
+import { App } from '@capacitor/app';
+import type { PluginListenerHandle } from '@capacitor/core';
 import './styles.css';
 // v1.69: KaTeX 公式样式(含字体)— 必须全局引入一次
 import 'katex/dist/katex.min.css';
@@ -73,6 +75,14 @@ export class LlApp extends LitElement {
   // V38: 开机欢迎图
   @state() private welcomeImg: string | null = null;
   @state() private showWelcome = false;
+  // v1.71: 退出确认(Android 返回键触发)
+  @state() private showExitConfirm = false;
+  private backHandle: PluginListenerHandle | null = null;
+  // v1.72: 图片全屏缩放 lightbox
+  @state() private lightboxImg: string | null = null;
+  private lbScale = 1;
+  private lbTx = 0;
+  private lbTy = 0;
   // V39: 阅读进度
   @state() private readProgress = 0;        // 0-100
   @state() private readProgressVisible = false;
@@ -194,6 +204,8 @@ export class LlApp extends LitElement {
     super.connectedCallback();
     if (Capacitor.isNativePlatform()) {
       console.log('[知识库] Running in native Android shell');
+      // v1.71: Android 返回键 — 逐层关 UI,主界面才弹"确认退出"
+      App.addListener('backButton', this.handleBackButton).then((h) => { this.backHandle = h; });
     }
     // V29: 应用主题 + 绑 ESC 键
     applySettings(this.theme);
@@ -256,9 +268,30 @@ export class LlApp extends LitElement {
     document.removeEventListener('keydown', this.handleKeydown);
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
     window.removeEventListener('pagehide', this.handlePageHide);
+    this.backHandle?.remove();   // v1.71
+    this.backHandle = null;
     this.flushLastRead();   // v1.68: 卸载前落盘
     super.disconnectedCallback();
   }
+
+  /**
+   * v1.71: Android 返回键 — 按层级逐步后退,都不在"主界面裸状态"时才弹确认退出:
+   *   欢迎页 → 任意 modal → 退出确认框自身 → 本地文件查看页 → 侧栏 → 主界面(弹确认退出)
+   */
+  private handleBackButton = () => {
+    if (this.showWelcome) { this.showWelcome = false; return; }
+    if (this.lightboxImg) { this.lightboxImg = null; return; }   // v1.72
+    if (this.showSettings || this.showShare || this.showHelp || this.showHistory || this.showLocalFiles
+        || this.showWiki || this.showGraph || this.showNewNote || this.showRenameNote || this.showMoveNote) {
+      this.showSettings = this.showShare = this.showHelp = this.showHistory = this.showLocalFiles = false;
+      this.showWiki = this.showGraph = this.showNewNote = this.showRenameNote = this.showMoveNote = false;
+      return;
+    }
+    if (this.showExitConfirm) { this.showExitConfirm = false; return; }
+    if (this.localFile) { this.localFile = null; return; }
+    if (this.sidebarOpen) { this.sidebarOpen = false; return; }
+    this.showExitConfirm = true;
+  };
 
   // V39: 阅读进度条 — 监听 .main 滚动,计算 0-100 进度
   protected firstUpdated() {
@@ -266,6 +299,82 @@ export class LlApp extends LitElement {
     if (main) {
       main.addEventListener('scroll', () => this.updateReadProgress(main), { passive: true });
     }
+  }
+
+  /**
+   * v1.72: 图片 lightbox 手势 — 双指捏合缩放 / 双击放大还原 / 单指平移 / 单击关闭。
+   * 元素随 lightboxImg 重建,所以在 updated 里绑定;单击关闭故意不用 click(移动端
+   * 合成 click 会在第一次轻点时就触发,双击缩放就没机会生效),统一走 touchend 判断。
+   */
+  protected updated(changed: Map<string, unknown>) {
+    if (changed.has('lightboxImg') && this.lightboxImg) {
+      this.lbScale = 1; this.lbTx = 0; this.lbTy = 0;
+      const box = this.querySelector('.img-lightbox') as HTMLElement | null;
+      const img = box?.querySelector('img') as HTMLImageElement | null;
+      if (box && img) this.bindLightboxGestures(box, img);
+    }
+  }
+
+  private bindLightboxGestures(box: HTMLElement, img: HTMLImageElement) {
+    const apply = () => {
+      img.style.transform = `translate(${this.lbTx}px, ${this.lbTy}px) scale(${this.lbScale})`;
+    };
+    let startDist = 0, startScale = 1, lastX = 0, lastY = 0;
+    let moved = false, lastTap = 0, tapTimer: number | null = null;
+
+    box.addEventListener('touchstart', (e) => {
+      moved = false;
+      if (e.touches.length === 2) {
+        startDist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY);
+        startScale = this.lbScale;
+        if (tapTimer !== null) { window.clearTimeout(tapTimer); tapTimer = null; }
+      } else if (e.touches.length === 1) {
+        lastX = e.touches[0].clientX; lastY = e.touches[0].clientY;
+      }
+    }, { passive: true });
+
+    box.addEventListener('touchmove', (e) => {
+      e.preventDefault();   // 阻止页面滚动/回弹
+      moved = true;
+      if (e.touches.length === 2) {
+        const d = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY);
+        if (startDist > 0) this.lbScale = Math.min(6, Math.max(1, startScale * d / startDist));
+      } else if (e.touches.length === 1 && this.lbScale > 1) {
+        const t = e.touches[0];
+        this.lbTx += t.clientX - lastX;
+        this.lbTy += t.clientY - lastY;
+        lastX = t.clientX; lastY = t.clientY;
+      }
+      apply();
+    }, { passive: false });
+
+    box.addEventListener('touchend', (e) => {
+      if (e.touches.length > 0) return;   // 还有手指在屏上
+      // 缩到接近 1x 时回弹到原始状态
+      if (this.lbScale < 1.05 && this.lbScale !== 1) {
+        this.lbScale = 1; this.lbTx = 0; this.lbTy = 0; apply();
+      }
+      if (moved) return;
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        // 双击:1x ↔ 2.5x
+        if (tapTimer !== null) { window.clearTimeout(tapTimer); tapTimer = null; }
+        if (this.lbScale > 1) { this.lbScale = 1; this.lbTx = 0; this.lbTy = 0; }
+        else { this.lbScale = 2.5; }
+        apply();
+        lastTap = 0;
+      } else {
+        lastTap = now;
+        // 单击:未放大时延迟确认不是双击再关闭
+        if (this.lbScale <= 1) {
+          tapTimer = window.setTimeout(() => { this.lightboxImg = null; tapTimer = null; }, 300);
+        }
+      }
+    });
   }
 
   private updateReadProgress(main: HTMLElement) {
@@ -884,6 +993,7 @@ export class LlApp extends LitElement {
   // V29: ESC 键关 modal/侧栏
   private handleKeydown = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
+      if (this.lightboxImg) { this.lightboxImg = null; return; }   // v1.72
       if (this.showSettings || this.showShare || this.showHelp || this.showHistory || this.showLocalFiles) {
         this.showSettings = false;
         this.showShare = false;
@@ -1095,6 +1205,7 @@ export class LlApp extends LitElement {
                 <ll-note-view
                   .note=${this.currentNote}
                   @note-save=${(e: CustomEvent) => this.onNoteSave(e)}
+                  @open-image=${(e: CustomEvent<string>) => { this.lightboxImg = e.detail; }}
                 ></ll-note-view>
               ` : this.localFile ? html`
                 <ll-file-viewer .file=${this.localFile}></ll-file-viewer>
@@ -1129,6 +1240,34 @@ export class LlApp extends LitElement {
           <ll-help-panel
             @close=${() => this.showHelp = false}
           ></ll-help-panel>
+        ` : null}
+
+        ${this.lightboxImg ? html`
+          <div class="img-lightbox">
+            <button class="img-lightbox-close" @click=${() => this.lightboxImg = null}>✕</button>
+            <img src=${this.lightboxImg} alt="图片预览" draggable="false" />
+            <div class="img-lightbox-tip">双击放大 · 双指捏合缩放 · 单击关闭</div>
+          </div>
+        ` : null}
+
+        ${this.showExitConfirm ? html`
+          <div class="modal-overlay" @click=${(e: MouseEvent) => {
+            if (e.target === e.currentTarget) this.showExitConfirm = false;
+          }}>
+            <div class="modal">
+              <div class="modal-header">
+                <h2>退出应用</h2>
+                <button class="modal-close" @click=${() => this.showExitConfirm = false}>✕</button>
+              </div>
+              <div class="modal-body">
+                <p style="margin:0 0 4px">确认退出知识库?</p>
+                <div class="modal-actions">
+                  <button class="modal-btn" @click=${() => this.showExitConfirm = false}>取消</button>
+                  <button class="modal-btn primary" @click=${() => { this.flushLastRead(); App.exitApp(); }}>退出</button>
+                </div>
+              </div>
+            </div>
+          </div>
         ` : null}
 
         ${this.showHistory ? html`
