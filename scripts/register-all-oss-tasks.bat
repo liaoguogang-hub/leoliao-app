@@ -10,5 +10,5 @@ if errorlevel 1 (
 )
 
 echo [OK] Elevated - registering all OSS sync tasks
-powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" %*
 pause

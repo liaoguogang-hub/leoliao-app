@@ -1,0 +1,40 @@
+@echo off
+rem ============================================================
+rem  ensure-oss-tasks-on-boot.cmd
+rem
+rem  Purpose : On Windows logon, ensure 3 OSS scheduled tasks exist.
+rem             If any missing, auto re-register them via UAC.
+rem  Deploy  : Drop into %APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
+rem  Encoding: ASCII only
+rem
+rem  Why "just re-register" instead of "check then repair":
+rem    User-context schtasks /Query cannot distinguish "task exists
+rem    (no access)" from "task truly missing" -- both return
+rem    "Access is denied". register-all-oss-tasks.ps1 is IDEMPOTENT
+rem    (deletes existing then recreates from script, no config loss).
+rem    So the safest path is: always invoke re-register. If tasks
+rem    exist, delete+recreate keeps the same config. If missing,
+rem    just create.
+rem
+rem  Failure modes already observed (twice, 10/08 + 10/13):
+rem    - SYSTEM tasks wiped after Windows big-version update
+rem    - User manually ran schtasks /Delete
+rem    - Task Scheduler service reset
+rem
+rem  Cost: registers 3 tasks + writes a log line. Takes ~2 seconds.
+rem ============================================================
+setlocal EnableExtensions
+
+set "BAT=D:\leoliao-app\scripts\register-all-oss-tasks.bat"
+set "LOG=%TEMP%\ensure-oss-tasks.log"
+
+if not exist "%BAT%" (
+    echo [%date% %time:~0,8%] [ERROR] %BAT% not found >> "%LOG%"
+    exit /b 0
+)
+
+rem Silent invoke via UAC; UAC will auto-deny on RDP / first login
+rem without console, so we redirect ALL output to log.
+start "" /min /b powershell -NoProfile -Command "Start-Process -FilePath '%BAT%' -Verb RunAs -Wait" >> "%LOG%" 2>&1
+
+exit /b 0
