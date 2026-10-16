@@ -1,4 +1,4 @@
-﻿# leoliao-app 发布脚本
+# leoliao-app 发布脚本
 #
 # 用法:
 #   .\release.ps1 -NewVersion 1.0.1+2 -Message "改了 XXX"
@@ -142,12 +142,17 @@ catch {
   throw
 }
 
-# 2. cap sync (web 资源同步到 android)
+# 2. 重新构建 + cap sync(必须先 build:版本号等常量是在 vite 构建时烧进 dist 的,
+#    只 sync 不 build 会把旧版本号打进新 APK — v1.13.0 踩过这个坑)
 Write-Host ""
-Write-Host "[2/8] npx cap sync android" -ForegroundColor Cyan
+Write-Host "[2/8] npm run build + npx cap sync android" -ForegroundColor Cyan
 if ($DryRun) {
   Write-Host "  [DryRun] 跳过"
 } else {
+  npm run build
+  if ($LASTEXITCODE -ne 0) {
+    throw "npm run build 失败"
+  }
   npx cap sync android
   if ($LASTEXITCODE -ne 0) {
     throw "npx cap sync android 失败"
